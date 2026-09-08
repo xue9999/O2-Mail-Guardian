@@ -1,0 +1,236 @@
+import Testing
+@testable import O2MailGuardianApp
+
+@Suite(.serialized)
+struct ProtocolTests {
+    private final class OperationToken {}
+
+    @Test func snapshotEnvelopeDecodesSnakeCaseWithoutMailContent() throws {
+        let json = #"{"protocol":1,"ok":true,"data":{"configured":true,"health":"healthy","health_label":"Wszystko działa","recommendation":"OK","automation":"on","mode":"protect","purge_enabled":false,"summary":{},"trained_spam":2,"trained_ham":3,"required_spam":200,"required_ham":200,"first_dry_run":true,"app_autostart":true,"version":"0.3.0"}}"#
+        let envelope = try ProtocolContract.decodeSnapshot(json)
+        #expect(envelope.ok)
+        #expect(envelope.data?.healthLabel == "Wszystko działa")
+        #expect(envelope.data?.trainedHam == 3)
+    }
+
+    @Test func errorEnvelopeDoesNotRequireData() throws {
+        let json = #"{"protocol":1,"ok":false,"error":{"code":"IMAP_AUTH","severity":"attention","message":"Błąd","recovery":"Sprawdź hasło"}}"#
+        let envelope = try ProtocolContract.decodeEmpty(json)
+        #expect(envelope.error?.code == "IMAP_AUTH")
+    }
+
+    @Test func commonFailuresOfferOneUsefulAction() {
+        #expect(failureQuickAction(for: "IMAP_AUTH") == .o2Instructions)
+        #expect(failureQuickAction(for: "RSPAMD_UNAVAILABLE") == .repair)
+        #expect(failureQuickAction(for: "SERVICE_STALE") == .repair)
+        #expect(failureQuickAction(for: "CONFIG_INVALID") == .none)
+        #expect(failureQuickAction(for: nil) == .none)
+    }
+
+    @Test func backendOperationsHaveBoundedTimeouts() {
+        #expect(Backend.timeoutSeconds(for: ["api", "snapshot"]) == 300)
+        #expect(Backend.timeoutSeconds(for: ["api", "run"]) == 1_200)
+    }
+
+    @Test func embeddedInstallerSelfTestCoversOfflineSafetyContract() throws {
+        try AppSelfTest.run()
+    }
+
+    @Test func onboardingUnlocksOnlyFromDurableBackendState() {
+        var snapshot = GuardianSnapshot()
+        #expect(!OnboardingGate.dryRunCompleted(snapshot))
+        #expect(!OnboardingGate.automationEnabled(snapshot))
+
+        snapshot.firstDryRun = true
+        snapshot.automation = "on"
+        #expect(OnboardingGate.dryRunCompleted(snapshot))
+        #expect(OnboardingGate.automationEnabled(snapshot))
+    }
+
+    @Test func onboardingRequiresExplicitFolderConfirmation() {
+        #expect(OnboardingGate.totalSteps == 3)
+        #expect(!OnboardingGate.canCommitFolders(folderSelected: false, busy: false))
+        #expect(!OnboardingGate.canCommitFolders(folderSelected: true, busy: true))
+        #expect(OnboardingGate.canCommitFolders(folderSelected: true, busy: false))
+    }
+
+    @Test func onboardingRejectsIncompleteAddressBeforeNetworkProbe() {
+        for invalid in ["", "andrzej", "@o2.pl", "andrzej@", "andrzej@o2", "andrzej@.pl", "andrzej@o2."] {
+            #expect(!OnboardingGate.emailLooksComplete(invalid))
+            #expect(!OnboardingGate.canProbe(email: invalid, password: "test", busy: false))
+        }
+        #expect(OnboardingGate.canProbe(email: " andrzej@o2.pl ", password: "test", busy: false))
+        #expect(!OnboardingGate.canProbe(email: "andrzej@o2.pl", password: "", busy: false))
+        #expect(!OnboardingGate.canProbe(email: "andrzej@o2.pl", password: "test", busy: true))
+    }
+
+    @Test func initialPresentationKeepsWizardUntilDryRunIsDurable() {
+        var snapshot = GuardianSnapshot()
+        #expect(InitialPresentationGate.requiresOnboarding(snapshot))
+
+        snapshot.configured = true
+        #expect(InitialPresentationGate.requiresOnboarding(snapshot))
+
+        snapshot.firstDryRun = true
+        snapshot.automation = "off"
+        #expect(!InitialPresentationGate.requiresOnboarding(snapshot))
+    }
+
+    @Test func onboardingResumesAtDryRunWithoutAskingForPasswordAgain() {
+        var snapshot = GuardianSnapshot()
+        #expect(!OnboardingGate.shouldResumeDryRun(snapshot, reconfigure: false))
+
+        snapshot.configured = true
+        snapshot.firstDryRun = false
+        #expect(OnboardingGate.shouldResumeDryRun(snapshot, reconfigure: false))
+        #expect(!OnboardingGate.shouldResumeDryRun(snapshot, reconfigure: true))
+
+        snapshot.firstDryRun = true
+        #expect(!OnboardingGate.shouldResumeDryRun(snapshot, reconfigure: false))
+    }
+
+    @MainActor
+    @Test func reconfigurationImmediatelyRevokesTheOldDryRunInTheGUI() {
+        let model = GuardianModel()
+        model.snapshot.configured = true
+        model.snapshot.firstDryRun = true
+        model.snapshot.automation = "on"
+        model.snapshot.mode = "active"
+        model.snapshot.purgeEnabled = true
+
+        model.markConfigurationCommitted()
+
+        #expect(model.snapshot.configured)
+        #expect(!model.snapshot.firstDryRun)
+        #expect(model.snapshot.automation == "off")
+        #expect(model.snapshot.mode == "protect")
+        #expect(!model.snapshot.purgeEnabled)
+        #expect(model.onboardingRequired)
+    }
+
+    @MainActor
+    @Test func initialBackendFailureShowsCriticalDashboardNotAccountWizard() {
+        let model = GuardianModel()
+        model.applyInitialRefreshFailureForTesting(APIErrorPayload(
+            code: "CONFIG_INVALID",
+            severity: "critical",
+            message: "Konfiguracja jest nieczytelna.",
+            recovery: "Uruchom Napraw."
+        ))
+
+        #expect(model.initialRefreshCompleted)
+        #expect(!model.onboardingRequired)
+        #expect(model.snapshot.health == "critical")
+        #expect(model.snapshot.healthLabel == "Nie działa")
+        #expect(model.snapshot.recommendation == "Uruchom Napraw.")
+    }
+
+    @MainActor
+    @Test func overlappingSnapshotRefreshesAreCoalescedWithoutBusyError() async {
+        let model = GuardianModel()
+        let first = Task { @MainActor in await model.refresh() }
+        await Task.yield()
+        await model.refresh()
+        await first.value
+
+        #expect(model.initialRefreshCompleted)
+        #expect(model.snapshot.configured)
+        #expect(model.failure == nil)
+        #expect(!model.busy)
+    }
+
+    @Test func processControllerRejectsConcurrentOperations() {
+        let controller = ProcessController()
+        let first = OperationToken()
+        let second = OperationToken()
+        #expect(controller.begin(first))
+        #expect(!controller.begin(second))
+        controller.end(first)
+        #expect(controller.begin(second))
+        controller.end(second)
+    }
+
+    @Test func processControllerRecordsCancellation() {
+        let controller = ProcessController()
+        let operation = OperationToken()
+        #expect(controller.begin(operation))
+        controller.cancel()
+        #expect(controller.cancelled())
+        controller.end(operation)
+    }
+
+    @Test func dashboardCoversEveryPublishedHealthState() {
+        let symbols = [
+            "healthy": "checkmark.shield.fill",
+            "attention": "exclamationmark.triangle.fill",
+            "critical": "exclamationmark.octagon.fill",
+            "manual": "pause.circle.fill",
+            "unconfigured": "shield",
+        ]
+        for (health, symbol) in symbols {
+            #expect(statusSymbol(health) == symbol)
+        }
+
+        var snapshot = GuardianSnapshot()
+        snapshot.healthLabel = "Wymaga uwagi"
+        snapshot.recommendation = "Uruchom Napraw."
+        #expect(statusAccessibilityLabel(snapshot) == "Stan ochrony: Wymaga uwagi. Uruchom Napraw.")
+    }
+
+    @Test func menuContainsOnlySafeQuickActions() {
+        #expect(GuardianQuickAction.allCases.map(\.rawValue) == [
+            "openDashboard", "runNow", "repair", "toggleAutomation",
+        ])
+        #expect(!GuardianQuickAction.allCases.map(\.rawValue).contains("purge"))
+        #expect(!GuardianQuickAction.allCases.map(\.rawValue).contains("restore"))
+    }
+
+    @Test func dashboardContainsAllOperationalCounters() {
+        var snapshot = GuardianSnapshot()
+        snapshot.summary.waitingQuarantine = 11
+        snapshot.summary.waitingReview = 7
+        snapshot.summary.pendingMoves = 3
+
+        #expect(DashboardCounter.allCases.map(\.rawValue) == [
+            "quarantine", "review", "pendingMoves",
+        ])
+        #expect(DashboardCounter.quarantine.value(in: snapshot) == 11)
+        #expect(DashboardCounter.review.value(in: snapshot) == 7)
+        #expect(DashboardCounter.pendingMoves.value(in: snapshot) == 3)
+    }
+
+    @Test func safetyModesUsePlainLanguage() {
+        #expect(safetyModeLabel("protect") == "Tylko obserwacja")
+        #expect(safetyModeLabel("active") == "Przenoszenie włączone")
+        #expect(safetyModeLabel("unexpected") == "Nieznane — uruchom Napraw")
+    }
+
+    @Test func archiveRestoreRequiresPreviewOfTheSameSelection() {
+        #expect(!ArchiveRestoreGate.canRestore(selectedID: 7, previewedID: nil, busy: false))
+        #expect(!ArchiveRestoreGate.canRestore(selectedID: 7, previewedID: 8, busy: false))
+        #expect(!ArchiveRestoreGate.canRestore(selectedID: 7, previewedID: 7, busy: true))
+        #expect(ArchiveRestoreGate.canRestore(selectedID: 7, previewedID: 7, busy: false))
+    }
+
+    @Test func archiveUsesFriendlyLabelsInsteadOfBackendCodes() {
+        #expect(archiveVerdictLabel("ham") == "ważna")
+        #expect(archiveVerdictLabel("uncertain") == "niepewna")
+        #expect(archiveStatusLabel("quarantined") == "kwarantanna")
+        #expect(archiveStatusLabel("pending_restore") == "bezpieczne uzgadnianie")
+        #expect(archiveStatusLabel("unexpected") == "stan techniczny")
+    }
+
+    @Test func localMockExercisesTheRealProcessAndJSONBridge() async throws {
+        let snapshot: GuardianSnapshot = try await Backend.call(["snapshot"])
+        #expect(snapshot.configured)
+        #expect(snapshot.health == "healthy")
+        #expect(snapshot.summary.waitingQuarantine == 18)
+
+        let page: ArchivePage = try await Backend.call(["archive", "list", "1"])
+        #expect(page.items.count == 3)
+        #expect(page.hasNext)
+
+        let preview: ArchivePreview = try await Backend.call(["archive", "preview", "104"])
+        #expect(preview.subject == "Przykładowy oczyszczony temat")
+    }
+}

@@ -1,0 +1,4 @@
+# Skrypt scripts/02-uruchom-silnik.command zastępuje poniższy znacznik
+# bezpiecznym hashem. Nie wpisuj tutaj hasła do skrzynki o2.
+password = "__RSPAMD_PASSWORD_HASH__";
+enable_password = "__RSPAMD_PASSWORD_HASH__";

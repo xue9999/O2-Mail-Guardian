@@ -1,0 +1,12 @@
+.DS_Store
+bin/
+macos/.build/
+macos/.swiftpm/
+coverage.out
+*.log
+*.db
+*.db-shm
+*.db-wal
+deploy/secrets/
+.env
+dist/
