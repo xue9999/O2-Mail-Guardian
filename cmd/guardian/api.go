@@ -43,25 +43,26 @@ type apiFailure struct {
 }
 
 type apiSnapshot struct {
-	Configured     bool          `json:"configured"`
-	Health         string        `json:"health"`
-	HealthLabel    string        `json:"health_label"`
-	Recommendation string        `json:"recommendation"`
-	Automation     string        `json:"automation"`
-	Mode           string        `json:"mode"`
-	PurgeEnabled   bool          `json:"purge_enabled"`
-	LastAttempt    *time.Time    `json:"last_attempt,omitempty"`
-	LastSuccess    *time.Time    `json:"last_success,omitempty"`
-	Stage          string        `json:"stage,omitempty"`
-	ErrorCode      string        `json:"error_code,omitempty"`
-	Summary        store.Summary `json:"summary"`
-	TrainedSpam    int           `json:"trained_spam"`
-	TrainedHam     int           `json:"trained_ham"`
-	RequiredSpam   int           `json:"required_spam"`
-	RequiredHam    int           `json:"required_ham"`
-	FirstDryRun    bool          `json:"first_dry_run"`
-	AppAutostart   bool          `json:"app_autostart"`
-	Version        string        `json:"version"`
+	Configured     bool           `json:"configured"`
+	Health         string         `json:"health"`
+	HealthLabel    string         `json:"health_label"`
+	Recommendation string         `json:"recommendation"`
+	Automation     string         `json:"automation"`
+	Mode           string         `json:"mode"`
+	PurgeEnabled   bool           `json:"purge_enabled"`
+	LastAttempt    *time.Time     `json:"last_attempt,omitempty"`
+	LastSuccess    *time.Time     `json:"last_success,omitempty"`
+	Stage          string         `json:"stage,omitempty"`
+	ErrorCode      string         `json:"error_code,omitempty"`
+	Summary        store.Summary  `json:"summary"`
+	TrainedSpam    int            `json:"trained_spam"`
+	TrainedHam     int            `json:"trained_ham"`
+	RequiredSpam   int            `json:"required_spam"`
+	RequiredHam    int            `json:"required_ham"`
+	FirstDryRun    bool           `json:"first_dry_run"`
+	AppAutostart   bool           `json:"app_autostart"`
+	Version        string         `json:"version"`
+	Protection     *apiProtection `json:"protection,omitempty"`
 }
 
 func (a *application) apiCommand(args []string) error {
@@ -90,8 +91,9 @@ func (a *application) apiCommand(args []string) error {
 				if len(args) == 2 {
 					runArgs = []string{"--dry-run"}
 				}
-				actionErr = a.runCommand(runArgs)
-				data = map[string]any{"completed": actionErr == nil}
+				var run *store.Run
+				run, actionErr = a.runCommandResult(runArgs)
+				data = apiRunResult(run, actionErr)
 			}
 		case "doctor":
 			deep := len(args) > 1 && args[1] == "deep"
@@ -191,6 +193,7 @@ func (a *application) buildAPISnapshot() (apiSnapshot, error) {
 		return snapshot, err
 	}
 	defer db.Close()
+	snapshot.Protection = protectionProgress(cfg, db, time.Now())
 	snapshot.Summary, err = db.Summary(context.Background(), time.Now().Add(-24*time.Hour))
 	if err != nil {
 		return snapshot, err
@@ -575,15 +578,25 @@ func (a *application) apiArchive(args []string) (any, error) {
 		}
 	}
 	if args[0] == "list" {
-		if len(args) > 2 {
-			return nil, errors.New("użyj archive list [strona]")
+		if len(args) > 3 {
+			return nil, errors.New("użyj archive list [strona] [all|quarantined|review|restored]")
+		}
+		status := ""
+		if len(args) == 3 {
+			switch args[2] {
+			case "all":
+			case "quarantined", "review", "restored":
+				status = args[2]
+			default:
+				return nil, errors.New("nieznana kategoria kopii")
+			}
 		}
 		rt, cleanup, err := a.openRuntime(false)
 		if err != nil {
 			return nil, err
 		}
 		defer cleanup()
-		items, err := rt.db.ArchivedPage(context.Background(), rt.cfg.Account.Email, 11, (page-1)*10)
+		items, err := rt.db.ArchivedPageFiltered(context.Background(), rt.cfg.Account.Email, 11, (page-1)*10, status)
 		if err != nil {
 			return nil, err
 		}

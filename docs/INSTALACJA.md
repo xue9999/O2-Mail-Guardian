@@ -252,7 +252,7 @@ Przycisk **Pełna kontrola** sprawdza również Rspamd, Redis i DNS.
 
 ## Krok 8: włącz automatyczne działanie
 
-Po udanym dry-run kliknij **Włącz ochronę co 2 godziny**. Możesz też świadomie
+Po udanym dry-run kliknij **Włącz sprawdzanie co 2 godziny**. Możesz też świadomie
 wybrać **Zakończ w trybie ręcznym** i sprawdzać pocztę przyciskiem w panelu.
 Jeśli pominiesz automatyzację, wróć do **Ustawień** i włącz przełącznik
 **Sprawdzaj skrzynkę co 2 godziny**. Poniższe polecenia są tylko awaryjne:

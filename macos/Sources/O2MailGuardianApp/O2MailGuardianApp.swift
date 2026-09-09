@@ -83,6 +83,7 @@ struct GuardianSnapshot: Codable {
     var firstDryRun = false
     var appAutostart = false
     var version = ""
+    var protection: ProtectionProgress?
 }
 
 struct SetupProbe: Codable {
@@ -99,6 +100,7 @@ struct SetupResult: Codable {
 
 struct CompletionResult: Codable {
     let completed: Bool
+    var summary: ScanOutcome?
 }
 
 struct ServiceResult: Codable {
@@ -370,20 +372,26 @@ final class GuardianModel: ObservableObject {
     @Published var notice: String?
     @Published var failure: APIErrorPayload?
     @Published var archivePage = ArchivePage(page: 1, items: [], hasNext: false)
-    @Published var archivePreview: ArchivePreview?
     @Published var reconfigure = false
+    @Published var section: GuardianSection = .overview
+    @Published var operationTitle = "Aktualizuję stan ochrony…"
+    @Published var snapshotIsStale = false
+    @Published var lastScan: ScanOutcome?
+    @Published var archiveLoaded = false
+    @Published var archiveFilter = "all"
     @Published private(set) var initialRefreshCompleted = false
     @Published private(set) var onboardingRequired = true
     private var refreshing = false
     private var noticeTask: Task<Void, Never>?
 
     let backgroundLaunch = ProcessInfo.processInfo.arguments.contains("--background")
+    let previewMode = ProcessInfo.processInfo.environment["GUARDIAN_PREVIEW"] == "1"
 
     func refresh() async {
         guard !refreshing else { return }
         refreshing = true
         let ownsBusyState = !busy
-        if ownsBusyState { busy = true }
+        if ownsBusyState { operationTitle = "Aktualizuję stan ochrony…"; busy = true }
         defer {
             refreshing = false
             if ownsBusyState { busy = false }
@@ -395,6 +403,7 @@ final class GuardianModel: ObservableObject {
                 onboardingRequired = InitialPresentationGate.requiresOnboarding(refreshed)
             }
             snapshot = refreshed
+            snapshotIsStale = false
             failure = nil
         } catch let error as APIErrorPayload {
             recordRefreshFailure(error)
@@ -405,6 +414,7 @@ final class GuardianModel: ObservableObject {
 
     private func recordRefreshFailure(_ error: APIErrorPayload) {
         failure = error
+        snapshotIsStale = true
         guard !initialRefreshCompleted else { return }
         // A missing config is returned as a valid unconfigured snapshot. Any
         // error here means the state could not be trusted and must not route
@@ -434,11 +444,17 @@ final class GuardianModel: ObservableObject {
         snapshot.automation = "off"
         snapshot.mode = "protect"
         snapshot.purgeEnabled = false
+        snapshot.protection = nil
+        lastScan = nil
         onboardingRequired = true
     }
 
-    func perform(_ work: @escaping () async throws -> String?) async {
+    func perform(_ title: String = "Aktualizuję ustawienia…", work: @escaping () async throws -> String?) async {
         guard !busy else { return }
+        noticeTask?.cancel()
+        notice = nil
+        failure = nil
+        operationTitle = title
         busy = true
         defer { busy = false }
         do {
@@ -472,15 +488,19 @@ final class GuardianModel: ObservableObject {
     }
 
     func runNow(dryRun: Bool = false) async {
-        await perform {
+        guard !busy else { return }
+        lastScan = nil
+        await perform(dryRun ? "Analizuję pocztę bez wprowadzania zmian…" : "Sprawdzam pocztę i przetwarzam korekty…") {
             let args = dryRun ? ["run", "dry-run"] : ["run"]
             let result: CompletionResult = try await Backend.call(args)
+            self.lastScan = result.summary
+            if let summary = result.summary, summary.errors > 0 { return "Sprawdzanie zakończono z uwagami. Zobacz podsumowanie." }
             return result.completed ? (dryRun ? "Próba zakończyła się pomyślnie." : "Skrzynka została sprawdzona.") : nil
         }
     }
 
     func repair() async {
-        await perform {
+        await perform("Sprawdzam połączenie i naprawiam lokalną ochronę…") {
             let result: CompletionResult = try await Backend.call(["repair"])
             return result.completed ? "Naprawa zakończyła się pomyślnie." : nil
         }
@@ -501,14 +521,14 @@ final class GuardianModel: ObservableObject {
     }
 
     func deepDoctor() async {
-        await perform {
+        await perform("Sprawdzam konto, foldery i lokalny silnik…") {
             let result: CompletionResult = try await Backend.call(["doctor", "deep"])
             return result.completed ? "Pełna kontrola nie wykryła problemów." : nil
         }
     }
 
     func exportDiagnostics() async {
-        await perform {
+        await perform("Przygotowuję prywatny raport diagnostyczny…") {
             let result: DiagnosticsResult = try await Backend.call(["diagnostics"])
             return "Bezpieczny raport zapisano: \(result.path)"
         }
@@ -516,10 +536,15 @@ final class GuardianModel: ObservableObject {
 
     func loadArchive(page: Int = 1) async {
         guard !busy else { return }
+        operationTitle = "Wczytuję listę kopii…"
         busy = true
+        archiveLoaded = false
         defer { busy = false }
         do {
-            archivePage = try await Backend.call(["archive", "list", String(page)])
+            var arguments = ["archive", "list", String(page)]
+            if archiveFilter != "all" { arguments.append(archiveFilter) }
+            archivePage = try await Backend.call(arguments)
+            archiveLoaded = true
             failure = nil
         } catch let error as APIErrorPayload {
             failure = error
@@ -528,21 +553,24 @@ final class GuardianModel: ObservableObject {
         }
     }
 
-    func previewArchive(id: Int64) async {
-        guard !busy else { return }
+    func previewArchive(id: Int64) async -> ArchivePreview? {
+        guard !busy else { return nil }
+        operationTitle = "Odczytuję bezpieczny podgląd…"
+        failure = nil
         busy = true
         defer { busy = false }
         do {
-            archivePreview = try await Backend.call(["archive", "preview", String(id)])
+            return try await Backend.call(["archive", "preview", String(id)])
         } catch let error as APIErrorPayload {
             failure = error
         } catch {
             failure = APIErrorPayload(code: "ARCHIVE", severity: "error", message: error.localizedDescription, recovery: "Uruchom Napraw.")
         }
+        return nil
     }
 
     func restoreArchive(id: Int64) async {
-        await perform {
+        await perform("Przywracam wiadomość do folderu Do sprawdzenia…") {
             let result: RestoreResult = try await Backend.call(["archive", "restore", String(id)])
             if result.alreadyPresent == true { return "Wiadomość nadal istnieje; nie utworzono duplikatu." }
             return result.restored ? "Wiadomość została przywrócona do AI-Do-sprawdzenia." : nil
@@ -604,7 +632,10 @@ struct O2MailGuardianApp: App {
     var body: some Scene {
         Window("O2 Mail Guardian", id: "dashboard") {
             RootView(model: model)
-                .frame(minWidth: 720, minHeight: 560)
+                // Isolated preview helper can exercise dark mode without
+                // changing the user's macOS appearance or saved preferences.
+                .preferredColorScheme(ProcessInfo.processInfo.environment["GUARDIAN_PREVIEW_THEME"] == "dark" ? .dark : nil)
+                .frame(minWidth: 860, minHeight: 620)
                 .task {
                     await model.refresh()
                     while !Task.isCancelled {
@@ -613,12 +644,12 @@ struct O2MailGuardianApp: App {
                     }
                 }
         }
-        .defaultSize(width: 820, height: 660)
+        .defaultSize(width: 1080, height: 780)
 
         MenuBarExtra {
             GuardianMenu(model: model)
         } label: {
-            Label("O2 Mail Guardian — \(model.snapshot.healthLabel)", systemImage: statusSymbol(model.snapshot.health))
+            Label("O2 Mail Guardian — \(ProtectionPresentation(model.snapshot, stale: model.snapshotIsStale).title)", systemImage: statusSymbol(model.snapshot.health))
         }
     }
 }
@@ -693,7 +724,7 @@ enum ArchiveRestoreGate {
     }
 }
 
-private func friendlyDate(_ value: String?) -> String {
+func friendlyDate(_ value: String?) -> String {
     guard let value else { return "Jeszcze brak" }
     let parser = ISO8601DateFormatter()
     parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -702,7 +733,10 @@ private func friendlyDate(_ value: String?) -> String {
         return parser.date(from: value)
     }()
     guard let date else { return value }
-    return date.formatted(date: .abbreviated, time: .shortened)
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "pl_PL")
+    formatter.dateFormat = "d MMM yyyy, HH:mm"
+    return formatter.string(from: date)
 }
 
 func archiveVerdictLabel(_ verdict: String) -> String {
@@ -748,30 +782,17 @@ struct RootView: View {
                 MainTabs(model: model)
             }
         }
-        .overlay(alignment: .bottom) {
-            if let notice = model.notice {
-                Text(notice).padding(10).background(.regularMaterial).clipShape(RoundedRectangle(cornerRadius: 10)).padding()
+        .tint(GuardianStyle.accent)
+        .accentColor(GuardianStyle.accent)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if model.previewMode {
+                Label("Podgląd aplikacji · przykładowe dane · bez połączenia z Twoją pocztą", systemImage: "play.rectangle")
+                    .font(.caption).foregroundStyle(GuardianStyle.accent)
+                    .frame(maxWidth: .infinity).padding(8).background(GuardianStyle.accent.opacity(0.08))
             }
         }
-        .alert("Guardian wymaga uwagi", isPresented: Binding(get: { model.failure != nil }, set: { if !$0 { model.failure = nil } })) {
-            if failureQuickAction(for: model.failure?.code) == .o2Instructions {
-                Button("Otwórz instrukcję o2") {
-                    if let url = URL(string: "https://pomoc.o2.pl/wpkonto/hasla-do-aplikacji-zewnetrznej") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-            }
-            if failureQuickAction(for: model.failure?.code) == .repair {
-                Button("Sprawdź i napraw") {
-                    model.failure = nil
-                    Task { await model.repair() }
-                }
-            }
-            Button("OK", role: .cancel) { model.failure = nil }
-        } message: {
-            if let error = model.failure {
-                Text("\(error.message)\n\n\(error.recovery ?? "Uruchom Napraw.")\n\nKod: \(error.code)")
-            }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            OperationFeedback(model: model)
         }
         .onAppear {
             if model.backgroundLaunch {
@@ -782,59 +803,6 @@ struct RootView: View {
     }
 }
 
-struct MainTabs: View {
-    @ObservedObject var model: GuardianModel
-    var body: some View {
-        TabView {
-            DashboardView(model: model).tabItem { Label("Pulpit", systemImage: "shield.checkered") }
-            LearningView(model: model).tabItem { Label("Nauka", systemImage: "graduationcap") }
-            ArchiveView(model: model).tabItem { Label("Odzyskiwanie", systemImage: "archivebox") }
-            SettingsView(model: model).tabItem { Label("Ustawienia", systemImage: "gearshape") }
-            HelpView(model: model).tabItem { Label("Pomoc", systemImage: "lifepreserver") }
-        }
-        .padding()
-    }
-}
-
-struct DashboardView: View {
-    @ObservedObject var model: GuardianModel
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 16) {
-                Image(systemName: statusSymbol(model.snapshot.health)).font(.system(size: 42)).accessibilityHidden(true)
-                VStack(alignment: .leading) {
-                    Text(model.snapshot.healthLabel).font(.title.bold())
-                    Text(model.snapshot.recommendation).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if model.busy { ProgressView().controlSize(.large) }
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(statusAccessibilityLabel(model.snapshot))
-            GroupBox("Najważniejsze informacje") {
-                Grid(alignment: .leading, horizontalSpacing: 30, verticalSpacing: 10) {
-                    GridRow { Text("Automatyzacja"); Text(model.snapshot.automation == "on" ? "Co 2 godziny" : "Tryb ręczny").bold() }
-                    GridRow { Text("Działanie"); Text(safetyModeLabel(model.snapshot.mode)).bold() }
-                    GridRow { Text("Ostatnia próba"); Text(friendlyDate(model.snapshot.lastAttempt)).bold() }
-                    GridRow { Text("Ostatni sukces"); Text(friendlyDate(model.snapshot.lastSuccess)).bold() }
-                    ForEach(DashboardCounter.allCases) { counter in
-                        GridRow { Text(counter.label); Text("\(counter.value(in: model.snapshot))").bold() }
-                    }
-                    GridRow { Text("Nauka spam / ważne"); Text("\(model.snapshot.trainedSpam)/\(model.snapshot.requiredSpam)  •  \(model.snapshot.trainedHam)/\(model.snapshot.requiredHam)").bold() }
-                }.padding(8)
-            }
-            HStack {
-                Button("Sprawdź skrzynkę teraz") { Task { await model.runNow() } }.buttonStyle(.borderedProminent).disabled(model.busy)
-                Button("Sprawdź i napraw") { Task { await model.repair() } }.disabled(model.busy)
-                Button("Odśwież stan") { Task { await model.refresh() } }.disabled(model.busy)
-                if model.busy { Button("Anuluj", role: .cancel) { model.cancel() } }
-            }
-            Text("Guardian nie otwiera linków ani załączników i nie wysyła treści wiadomości do chmury.").font(.footnote).foregroundStyle(.secondary)
-            Spacer()
-        }.padding()
-    }
-}
-
 struct OnboardingView: View {
     @ObservedObject var model: GuardianModel
     @State private var step = 1
@@ -842,32 +810,37 @@ struct OnboardingView: View {
     @State private var password = ""
     @State private var probe: SetupProbe?
     @State private var spamFolder = ""
-    @State private var dryRunDone = false
+    private var dryRunDone: Bool { setupCommitted && OnboardingGate.dryRunCompleted(model.snapshot) }
     @State private var setupCommitted = false
     @State private var showFolderChoice = false
+    @FocusState private var accountField: AccountField?
+    private enum AccountField { case email, password }
 
     init(model: GuardianModel) {
         self.model = model
         let resumeDryRun = OnboardingGate.shouldResumeDryRun(model.snapshot, reconfigure: model.reconfigure)
         _step = State(initialValue: resumeDryRun ? 3 : 1)
         _setupCommitted = State(initialValue: resumeDryRun)
-        _dryRunDone = State(initialValue: model.snapshot.firstDryRun)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text(model.reconfigure ? "Ustawienia konta" : "Pierwsza konfiguracja").font(.largeTitle.bold())
+        GuardianPage(eyebrow: "Zacznij ze spokojem", title: model.reconfigure ? "Ustawienia konta" : "Połącz swoją pocztę", subtitle: "Trzy kroki. Najpierw sprawdzimy wszystko bez zmieniania wiadomości.") {
             if model.reconfigure && !setupCommitted {
                 Button("Anuluj zmianę ustawień", role: .cancel) { model.reconfigure = false }
             } else if setupCommitted {
                 Label("Ustawienia zapisano; automat pozostaje wstrzymany do zakończenia kreatora.", systemImage: "lock.shield")
                     .foregroundStyle(.secondary)
             }
-            Text("Krok \(step) z \(OnboardingGate.totalSteps)").foregroundStyle(.secondary)
-            ProgressView(value: Double(step), total: Double(OnboardingGate.totalSteps))
-                .accessibilityLabel("Postęp konfiguracji")
-                .accessibilityValue("Krok \(step) z \(OnboardingGate.totalSteps)")
-            GroupBox {
+            HStack(spacing: 14) {
+                ForEach(1...3, id: \.self) { index in
+                    HStack(spacing: 8) {
+                        Image(systemName: index < step ? "checkmark.circle.fill" : "\(index).circle.fill")
+                        Text(["Konto", "Foldery", "Bezpieczna próba"][index - 1]).font(.callout.weight(index == step ? .semibold : .regular))
+                    }.foregroundStyle(index <= step ? GuardianStyle.accent : .secondary)
+                    if index < 3 { Rectangle().fill(.quaternary).frame(height: 1) }
+                }
+            }.accessibilityElement(children: .ignore).accessibilityLabel("Krok \(step) z 3")
+            GuardianCard {
                 switch step {
                 case 1:
                     VStack(alignment: .leading, spacing: 12) {
@@ -879,21 +852,30 @@ struct OnboardingView: View {
                             }
                             .font(.footnote)
                         }
+                        Text("Adres e-mail o2").font(.callout.weight(.medium))
                         TextField("adres@o2.pl", text: $email)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($accountField, equals: .email)
+                            .accessibilityLabel("Adres e-mail o2")
+                            .onSubmit { accountField = .password }
                             .textContentType(.username)
                             .autocorrectionDisabled()
-                        if !email.isEmpty && !OnboardingGate.emailLooksComplete(email) {
+                        if !email.isEmpty && accountField != .email && !OnboardingGate.emailLooksComplete(email) {
                             Text("Wpisz pełny adres, np. nazwa@o2.pl.")
                                 .font(.footnote)
                                 .foregroundStyle(.orange)
                         }
-                        SecureField("Hasło aplikacyjne o2", text: $password)
-                        Text("Nie wpisuj zwykłego hasła do poczty. Hasło nie trafia do argumentów procesu ani logów.").font(.footnote).foregroundStyle(.secondary)
+                        Text("Hasło aplikacyjne").font(.callout.weight(.medium))
+                        SecureField("Wklej hasło utworzone w o2", text: $password)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($accountField, equals: .password)
+                            .accessibilityLabel("Hasło aplikacyjne o2")
+                        Text("Nie wpisuj zwykłego hasła do poczty. Zapiszemy je bezpiecznie w pęku kluczy macOS.").font(.footnote).foregroundStyle(.secondary)
                         Button("Połącz i wykryj ustawienia") { Task { await probeConnection() } }
                             .buttonStyle(.borderedProminent)
                             .keyboardShortcut(.defaultAction)
                             .disabled(!OnboardingGate.canProbe(email: email, password: password, busy: model.busy))
-                        if model.busy { Button("Anuluj", role: .cancel) { model.cancel() } }
+
                     }
                 case 2:
                     VStack(alignment: .leading, spacing: 12) {
@@ -921,7 +903,7 @@ struct OnboardingView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         HStack {
-                            Button("Wstecz") { step = 1 }
+                            Button("Wstecz") { step = 1 }.disabled(model.busy)
                             Button("Potwierdzam foldery i zapisuję") { Task { await commitSetup() } }
                                 .buttonStyle(.borderedProminent)
                                 .keyboardShortcut(.defaultAction)
@@ -931,7 +913,7 @@ struct OnboardingView: View {
                 default:
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Pierwsza próba — bez zmian").font(.title2.bold())
-                        Text("Najpierw Guardian pokaże decyzje bez przenoszenia, uczenia ani kasowania wiadomości.")
+                        Text("Sprawdzimy pocztę i pokażemy podsumowanie proponowanych działań. Żadna wiadomość nie zostanie przeniesiona, usunięta ani użyta do nauki.")
                         if !dryRunDone {
                             Button("Wykonaj bezpieczną próbę") { Task { await runDry() } }
                                 .buttonStyle(.borderedProminent)
@@ -939,8 +921,11 @@ struct OnboardingView: View {
                                 .disabled(model.busy)
                             Button("Zmień ponownie dane konta") { step = 1 }.disabled(model.busy)
                         } else {
-                            Label("Próba zakończona pomyślnie", systemImage: "checkmark.circle.fill")
-                            Button("Włącz ochronę co 2 godziny") { Task { await enableService() } }
+                            Label("Bezpieczna próba została wykonana", systemImage: "checkmark.circle.fill").foregroundStyle(GuardianStyle.accent)
+                            if let scan = model.lastScan, scan.dryRun { ScanOutcomeView(outcome: scan) }
+                            Text("Następny etap to obserwacja Odebranych. Wiadomości z folderu SPAM mogą być odkładane do AI-Do-sprawdzenia. Porządkowanie Odebranych włączysz osobno po spełnieniu warunków bezpieczeństwa.")
+                                .font(.callout).foregroundStyle(.secondary)
+                            Button("Włącz sprawdzanie co 2 godziny") { Task { await enableService() } }
                                 .buttonStyle(.borderedProminent)
                                 .keyboardShortcut(.defaultAction)
                                 .disabled(model.busy)
@@ -951,13 +936,16 @@ struct OnboardingView: View {
                     }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
-            Spacer()
-        }.padding(28)
+            .disabled(model.busy)
+            PrivacyNote()
+        }
+        .onAppear { if step == 1 { accountField = .email } }
     }
 
     private func probeConnection() async {
+        model.failure = nil
+        model.notice = nil
+        model.operationTitle = "Sprawdzam konto i bezpieczne połączenie z o2…"
         model.busy = true
         defer { model.busy = false }
         do {
@@ -973,6 +961,9 @@ struct OnboardingView: View {
     }
 
     private func commitSetup() async {
+        model.failure = nil
+        model.notice = nil
+        model.operationTitle = "Zapisuję konto i przygotowuję foldery…"
         model.busy = true
         defer { model.busy = false }
         do {
@@ -993,7 +984,6 @@ struct OnboardingView: View {
         await model.runNow(dryRun: true)
         // Cancellation is informational and intentionally does not populate
         // model.failure. Only the durable backend gate may unlock automation.
-        dryRunDone = OnboardingGate.dryRunCompleted(model.snapshot)
     }
 
     private func enableService() async {
@@ -1005,187 +995,12 @@ struct OnboardingView: View {
     }
 }
 
-struct LearningView: View {
-    @ObservedObject var model: GuardianModel
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Nauka na Twoich poprawkach").font(.title.bold())
-            Text("Jeśli Guardian się pomyli, przeciągnij wiadomość w poczcie o2 do odpowiedniego folderu. Przy następnym sprawdzeniu korekta zostanie zapamiętana.")
-            GroupBox("Którego folderu użyć?") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Label("Niechciany mail: AI-Naucz-spam", systemImage: "hand.thumbsdown")
-                    Label("Ważny mail: AI-Naucz-wazne", systemImage: "hand.thumbsup")
-                    Text("Ważna korekta jest trwałym zakazem usunięcia tej wiadomości, nawet gdy lokalny filtr chwilowo nie działa.").font(.footnote).foregroundStyle(.secondary)
-                }.padding(8)
-            }
-            Text("Zapamiętane: spam \(model.snapshot.trainedSpam)/\(model.snapshot.requiredSpam), ważne \(model.snapshot.trainedHam)/\(model.snapshot.requiredHam)")
-            HStack {
-                Button("Przetwórz korekty teraz") { Task { await model.runNow() } }.buttonStyle(.borderedProminent).disabled(model.busy)
-                if model.busy { Button("Anuluj", role: .cancel) { model.cancel() } }
-            }
-            Spacer()
-        }.padding()
-    }
-}
-
-struct ArchiveView: View {
-    @ObservedObject var model: GuardianModel
-    @State private var selected: ArchiveItem?
-    @State private var previewedID: Int64?
-    @State private var showingRestoreConfirmation = false
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Odzyskiwanie wiadomości").font(.title.bold())
-            Text("Pokazywane są wyłącznie techniczne wpisy. Nagłówki pojawią się dopiero po wybraniu podglądu.").foregroundStyle(.secondary)
-            List(model.archivePage.items, selection: $selected) { item in
-                VStack(alignment: .leading) {
-                    Text("Kopia nr \(item.id)").bold()
-                    Text("\(friendlyDate(item.date)) • \(archiveVerdictLabel(item.verdict)) • \(archiveStatusLabel(item.status))")
-                        .font(.caption)
-                }
-                    .tag(item)
-            }
-            HStack {
-                Button("Poprzednia") { Task { await model.loadArchive(page: max(1, model.archivePage.page - 1)) } }.disabled(model.archivePage.page <= 1 || model.busy)
-                Text("Strona \(model.archivePage.page)")
-                Button("Następna") { Task { await model.loadArchive(page: model.archivePage.page + 1) } }.disabled(!model.archivePage.hasNext || model.busy)
-                Spacer()
-                if model.busy { ProgressView().controlSize(.small) }
-                Button("Bezpieczny podgląd") {
-                    if let selected { Task { await preview(selected) } }
-                }.disabled(selected == nil || model.busy)
-                Button("Przywróć") { showingRestoreConfirmation = true }
-                    .disabled(!ArchiveRestoreGate.canRestore(selectedID: selected?.id, previewedID: previewedID, busy: model.busy))
-            }
-        }.padding().task { await model.loadArchive() }
-        .onChange(of: selected) { _ in previewedID = nil }
-        .confirmationDialog("Przywrócić wybraną wiadomość?", isPresented: $showingRestoreConfirmation) {
-            Button("Przywróć do AI-Do-sprawdzenia") {
-                if let selected {
-                    Task {
-                        await model.restoreArchive(id: selected.id)
-                        previewedID = nil
-                    }
-                }
-            }
-            Button("Anuluj", role: .cancel) {}
-        } message: {
-            Text("Guardian utworzy kopię w folderze AI-Do-sprawdzenia. Wiadomość nie zostanie wysłana do żadnego odbiorcy.")
-        }
-        .sheet(item: Binding(get: { model.archivePreview.map { PreviewBox(value: $0) } }, set: { _ in model.archivePreview = nil })) { box in
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Bezpieczny podgląd nagłówków").font(.title2.bold())
-                Text("Od: \(box.value.from)\nTemat: \(box.value.subject)\nData: \(box.value.date)")
-                Text("Treść, HTML, odnośniki i załączniki nie zostały otwarte.").foregroundStyle(.secondary)
-                Button("Zamknij") { model.archivePreview = nil }
-            }.padding(24).frame(minWidth: 520)
-        }
-    }
-
-    private func preview(_ item: ArchiveItem) async {
-        model.archivePreview = nil
-        await model.previewArchive(id: item.id)
-        if model.archivePreview != nil { previewedID = item.id }
-    }
-
-    private struct PreviewBox: Identifiable { let id = UUID(); let value: ArchivePreview }
-}
-
-struct SettingsView: View {
-    @ObservedObject var model: GuardianModel
-    @State private var activeConfirmation = ""
-    @State private var purgeConfirmation = ""
-    @State private var showAdvancedSafety = false
-    var body: some View {
-        Form {
-            Section("Codzienne działanie") {
-                Toggle("Sprawdzaj skrzynkę co 2 godziny", isOn: Binding(get: { model.snapshot.automation == "on" }, set: { value in Task { await model.setAutomation(value) } })).disabled(model.busy)
-                Text("Zamknięcie aplikacji nie zatrzymuje niezależnej ochrony w tle.").font(.caption)
-                Toggle("Uruchamiaj panel po zalogowaniu", isOn: Binding(get: { model.snapshot.appAutostart }, set: { value in Task { await model.setAppAutostart(value) } })).disabled(model.busy)
-                Text("Wyłączenie panelu przy logowaniu nie zatrzymuje sprawdzania poczty.").font(.caption)
-            }
-            Section("Konto i hasło aplikacyjne") {
-                Button("Sprawdź konto lub zapisz nowe hasło") { model.reconfigure = true }.disabled(model.busy)
-                Text("Hasło jest ponownie sprawdzane z o2 i zapisywane tylko w pęku kluczy macOS.").font(.caption)
-            }
-            Section {
-                DisclosureGroup("Ustawienia zaawansowane — zwykle nie trzeba ich zmieniać", isExpanded: $showAdvancedSafety) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        GroupBox("Przenoszenie wiadomości") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Aktualnie: \(safetyModeLabel(model.snapshot.mode))")
-                                Text("„Tylko obserwacja” niczego nie przenosi. Po okresie prób możesz świadomie zezwolić na przenoszenie pewnego spamu i ratowanie pewnych wiadomości.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Button("Wróć do samej obserwacji") { Task { await setMode("protect", confirmation: "") } }
-                                    .disabled(model.snapshot.mode == "protect" || model.busy)
-                                TextField("Aby zezwolić na przenoszenie, wpisz AKTYWNY", text: $activeConfirmation)
-                                    .disabled(model.snapshot.mode == "active" || model.busy)
-                                Button("Włącz przenoszenie pewnych wiadomości") { Task { await setMode("active", confirmation: activeConfirmation) } }
-                                    .disabled(model.snapshot.mode == "active" || activeConfirmation != "AKTYWNY" || model.busy)
-                            }
-                            .padding(6)
-                        }
-                        GroupBox("Trwałe usuwanie") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Aktualnie: \(model.snapshot.purgeEnabled ? "włączone" : "wyłączone")")
-                                Text("Pozostaw wyłączone, dopóki Guardian nie zakończy wymaganego okresu obserwacji. Włączenie nadal podlega wszystkim blokadom bezpieczeństwa.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Button("Wyłącz trwałe usuwanie") { Task { await setPurge("disable", confirmation: "") } }
-                                    .disabled(!model.snapshot.purgeEnabled || model.busy)
-                                TextField("Aby włączyć, wpisz WLACZ", text: $purgeConfirmation)
-                                    .disabled(model.snapshot.purgeEnabled || model.busy)
-                                Button("Włącz trwałe usuwanie po wszystkich kontrolach") { Task { await setPurge("enable", confirmation: purgeConfirmation) } }
-                                    .disabled(model.snapshot.purgeEnabled || purgeConfirmation != "WLACZ" || model.busy)
-                            }
-                            .padding(6)
-                        }
-                    }
-                    .padding(.top, 8)
-                }
-            }
-        }.padding()
-    }
-
-    private func setMode(_ value: String, confirmation: String) async {
-        await model.perform {
-            let _: EmptyPayload = try await Backend.call(["mode"], input: ["value": value, "confirm": confirmation])
-            return "Zmieniono tryb ochrony."
-        }
-        if model.failure == nil { activeConfirmation = "" }
-    }
-    private func setPurge(_ value: String, confirmation: String) async {
-        await model.perform {
-            let _: EmptyPayload = try await Backend.call(["purge"], input: ["value": value, "confirm": confirmation])
-            return "Zmieniono ustawienie trwałego usuwania."
-        }
-        if model.failure == nil { purgeConfirmation = "" }
-    }
-}
-
-struct HelpView: View {
-    @ObservedObject var model: GuardianModel
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Pomoc i diagnostyka").font(.title.bold())
-            Text("Spam pozostał w Odebranych → przenieś go do AI-Naucz-spam.\nWażna wiadomość trafiła do SPAM-u lub kwarantanny → przenieś ją do AI-Naucz-wazne.")
-            HStack {
-                Button("Pełna kontrola") { Task { await model.deepDoctor() } }.disabled(model.busy)
-                Button("Zapisz bezpieczny raport na Biurku") { Task { await model.exportDiagnostics() } }.disabled(model.busy)
-            }
-            Text("Raport nie zawiera wiadomości, adresów, tematów, załączników, skrótów wiadomości ani sekretów.").font(.footnote).foregroundStyle(.secondary)
-            Spacer()
-        }.padding()
-    }
-}
-
 struct GuardianMenu: View {
     @ObservedObject var model: GuardianModel
     @Environment(\.openWindow) private var openWindow
     var body: some View {
-        Text(model.snapshot.healthLabel).font(.headline)
-        Text(model.snapshot.recommendation).font(.caption)
+        Text(ProtectionPresentation(model.snapshot, stale: model.snapshotIsStale).title).font(.headline)
+        Text(ProtectionPresentation(model.snapshot, stale: model.snapshotIsStale).detail).font(.caption)
         Divider()
         ForEach(GuardianQuickAction.allCases) { action in
             switch action {

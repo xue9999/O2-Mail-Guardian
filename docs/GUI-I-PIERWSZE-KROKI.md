@@ -1,84 +1,127 @@
 # Graficzny panel i pierwsze kroki
 
-## Pierwsza konfiguracja — trzy ekrany
+## Pierwsza konfiguracja — trzy kroki
 
-1. Wpisz adres o2 i osobne hasło aplikacyjne, a następnie kliknij **Połącz i
-   wykryj ustawienia**.
-2. Sprawdź automatycznie wykryty folder SPAM i kliknij
-   **Potwierdzam foldery i zapisuję**. Listę folderów rozwijaj tylko,
-   jeśli wykryta nazwa jest nieprawidłowa. Lista nie pokazuje Odebranych,
-   folderów Guardiana ani technicznych pozycji, których nie wolno wybrać.
-   Nazwy czterech dodatkowych folderów ochronnych są dostępne pod
-   **Pokaż nazwy folderów Guardiana**, ale nie trzeba ich rozwijać.
-3. Kliknij **Wykonaj bezpieczną próbę**. Dopiero po sukcesie wybierz ochronę co
-   2 godziny albo świadomy tryb ręczny.
+1. **Konto:** wpisz adres o2 i osobne hasło aplikacyjne. Przycisk **Połącz i
+   wykryj ustawienia** sprawdza konto i bezpieczne połączenie. Instrukcja
+   tworzenia hasła jest dostępna przy formularzu; hasło zostanie zapisane
+   w pęku kluczy macOS.
+2. **Foldery:** sprawdź wykryty folder SPAM i kliknij **Potwierdzam foldery
+   i zapisuję**. Listę rozwijaj tylko, jeśli wykryta nazwa jest nieprawidłowa.
+   Nazwy dodatkowych folderów są dostępne w rozwijanej sekcji.
+3. **Bezpieczna próba:** kliknij **Wykonaj bezpieczną próbę**. Wynik pokazuje
+   liczbę sprawdzonych wiadomości i proponowanych działań z tej konkretnej
+   operacji. To symulacja bieżącego trybu, bez przenoszenia, nauki i kasowania.
+   Następnie wybierz **Włącz sprawdzanie co 2 godziny** albo świadomy tryb ręczny.
 
-Pięć wymaganych kontroli bezpieczeństwa — konto, połączenie, folder SPAM,
-układ folderów i dry-run — nadal jest wykonywanych, ale nie wymaga przechodzenia
-przez pięć osobnych ekranów.
+Po zapisaniu konta zamknięcie aplikacji przed końcem próby nie wymaga ponownego
+wpisywania hasła: następne uruchomienie wróci do kroku 3. Liczniki konkretnej
+próby są pokazywane po jej wykonaniu w bieżącej sesji; aplikacja nie zastępuje
+ich statystyką dobową, jeśli poprzednia próba nie jest już dostępna w pamięci.
 
-## Co zobaczysz po otwarciu
+## Co Guardian robi z pocztą
 
-O2 Mail Guardian pokazuje jeden czytelny stan:
+Sprawność automatu i uprawnienie do porządkowania to dwie odrębne informacje.
+Przegląd i pasek menu pokazują m.in.:
 
-- **Wszystko działa** — automat ma świeży udany przebieg;
-- **Wymaga uwagi** — ostatni sukces był ponad 4 godziny temu albo pozostał
-  przypadek do uzgodnienia;
-- **Nie działa** — nie było sukcesu od ponad 48 godzin;
-- **Tryb ręczny** — automat jest świadomie wyłączony.
+- **Odebrane pod obserwacją:** automat sprawdza pocztę, ale nie przenosi
+  automatycznie wiadomości z Odebranych. Wiadomości z folderu SPAM mogą trafić
+  do `AI-Do-sprawdzenia`. Korekty z folderów nauki nadal są przetwarzane.
+- **Porządkowanie jest włączone:** pewny spam trafia do kwarantanny,
+  prawidłowe wiadomości z folderu SPAM wracają do Odebranych, a przypadki
+  niepewne trafiają do sprawdzenia.
+- **Sprawdzanie na Twoje żądanie:** automat jest wyłączony. Uruchom sprawdzanie
+  przyciskiem w aplikacji lub ponownie włącz harmonogram.
+- **Ochrona wymaga uwagi / naprawy:** skorzystaj z proponowanego działania.
+- **Nie można potwierdzić stanu:** ostatni odczyt się nie udał. Widoczne dane
+  mogą być nieaktualne; interfejs nie przedstawia ich jako potwierdzenia ochrony.
 
-Pod stanem zawsze znajduje się jedno zalecane następne działanie. Przycisk
-**Sprawdź skrzynkę teraz** uruchamia pełny, bezpieczny przebieg, a **Sprawdź i
-napraw** kontroluje lokalny silnik i konfigurację. Długą operację można
-anulować; zapisane wcześniej intencje i nierozstrzygnięte ruchy zostaną
-uzgodnione przy następnym przebiegu.
+Trwałe usuwanie jest osobnym uprawnieniem i domyślnie pozostaje wyłączone.
+Włączenie porządkowania nie włącza trwałego usuwania.
 
-Komunikat o odrzuconym logowaniu ma przycisk otwierający właściwą instrukcję
-o2. Komunikat o zatrzymanej lokalnej ochronie ma bezpośredni przycisk
-**Sprawdź i napraw**. Kody techniczne pozostają jedynie informacją dla osoby
-pomagającej rozwiązać problem.
+## Przegląd
 
-## Zakładki
+Pulpit pokazuje stan, jedno główne działanie oraz osobno:
 
-- **Pulpit** — ostatnia próba i sukces, stan automatu, tryb ochrony i liczniki;
-- **Nauka** — dokładna instrukcja użycia `AI-Naucz-spam` i
-  `AI-Naucz-wazne` oraz przycisk przetwarzający korekty;
-- **Odzyskiwanie** — 10 technicznych wpisów na stronę; przywrócenie do
-  `AI-Do-sprawdzenia` odblokowuje się dopiero po obejrzeniu oczyszczonego
-  podglądu trzech nagłówków i wymaga osobnego potwierdzenia;
-- **Ustawienia** — automat skanowania, start samego panelu po zalogowaniu,
-  konto oraz zwinięta sekcja zaawansowana. Na co dzień nie trzeba jej
-  otwierać; zawiera ona osobno zabezpieczone przenoszenie wiadomości i trwałe
-  usuwanie;
-- **Pomoc** — głęboka kontrola i zredagowany pakiet diagnostyczny.
+- wyniki ostatnich 24 godzin (bez doliczania próbnych skanowań);
+- wynik ostatniego sprawdzenia uruchomionego w tej sesji;
+- wiadomości do oceny i przypadki wymagające naprawy;
+- postęp okresu obserwacji i potwierdzenia jakości;
+- ostatni sukces, harmonogram oraz rozwijane szczegóły.
 
-GUI nigdy nie dostaje treści e-maila, HTML, odnośników ani załączników. Pełną
-wiadomość widzi wyłącznie lokalny backend Go i lokalny Rspamd. Hasło
-aplikacyjne jest przesyłane do backendu przez stdin i nie wraca w JSON-ie.
+Liczniki folderów pochodzą z zapisów Guardiana, nie z ciągłego podglądu IMAP.
+Podsumowanie skanowania może zawierać uwagi nawet przy zakończonej operacji;
+liczba nieudanych kontroli jest wtedy widoczna osobno.
 
-## Ikona w pasku menu
+## Nauka i korekty
 
-Ikona pokazuje tekstowy stan oraz cztery bezpieczne czynności: otwarcie
-panelu, sprawdzenie skrzynki, naprawę i pauzę/wznowienie automatu. Celowo nie
-ma tam trwałego usuwania ani odzyskiwania.
+W poczcie o2 przenieś wiadomość do:
 
-Wyłączenie opcji **Uruchamiaj panel po zalogowaniu** dotyczy tylko okna i
-ikony. Nie zatrzymuje niezależnego sprawdzania poczty co 2 godziny.
+- `AI-Naucz-wazne`, jeśli to prawidłowa wiadomość;
+- `AI-Naucz-spam`, jeśli to spam.
 
-Ponowne zapisanie hasła lub zmiana folderu SPAM przez kreator zatrzymuje automat,
-przywraca tryb ochronny i unieważnia poprzednią próbę. Po zmianie trzeba
-ponownie wykonać dry-run i świadomie kliknąć **Włącz ochronę co 2 godziny**.
-Po zapisaniu nowych ustawień kreator pozostaje otwarty aż do zakończenia próby,
-więc przycisk uruchomienia automatu nie znika samoczynnie. Można też wybrać
-**Zakończ w trybie ręcznym**; wtedy poczta będzie sprawdzana tylko na żądanie.
-Jeżeli konfiguracja nie powiedzie się, Guardian próbuje przywrócić poprzednią
-konfigurację, sekret z pęku kluczy oraz wcześniejszy automat.
+Aplikacja objaśnia oba przypadki i pozwala skopiować nazwę folderu. Przycisk
+**Sprawdź pocztę i przetwórz korekty** uruchamia pełne sprawdzenie, zgodnie
+z bieżącym trybem. Przy wyłączonym automacie należy uruchomić je ręcznie.
 
-Na pulpicie techniczny tryb `protect` jest pokazany jako **Tylko obserwacja**,
-a `active` jako **Przenoszenie włączone**. Ustawienia te znajdują się pod
-**Ustawienia zaawansowane — zwykle nie trzeba ich zmieniać**. Trwałe usuwanie
-pozostaje tam wyłączone i nadal wymaga wpisania osobnego potwierdzenia.
+## Odzyskiwanie
 
-Jeśli zamkniesz aplikację już po zapisaniu konta, ale przed ukończeniem
-bezpiecznej próby, następne uruchomienie wróci od razu do kroku 3. Nie trzeba
-ponownie wpisywać adresu ani hasła; automat nadal pozostaje wyłączony.
+Kategorie **Wszystkie kopie**, **Kwarantanna**, **Do sprawdzenia** i
+**Przywrócone** filtrują całe archiwum danego konta przed podziałem na strony.
+Każda strona zawiera do 10 wpisów. Lista celowo nie odszyfrowuje tematów
+wiadomości automatycznie.
+
+1. Wybierz kopię według daty i stanu.
+2. Kliknij **Pokaż nadawcę i temat**. Obok listy zobaczysz wyłącznie oczyszczone
+   nagłówki: nadawcę, temat i datę.
+3. Kliknij **Przywróć wiadomość** i potwierdź przywrócenie do
+   `AI-Do-sprawdzenia` w poczcie o2.
+
+Zmiana wyboru, strony lub kategorii unieważnia podgląd i możliwość przywrócenia
+poprzedniej kopii. Treść, HTML, linki i załączniki nie są renderowane. Pusta
+lista i nieudany odczyt mają odrębne komunikaty.
+
+## Ustawienia
+
+Harmonogram, przenoszenie wiadomości oraz uruchamianie panelu po zalogowaniu
+mają oddzielne sekcje. Zamknięcie okna i wyłączenie startu panelu nie zatrzymują
+niezależnego automatu.
+
+Przenoszenie nie jest ukryte w ustawieniach zaawansowanych. Jego sekcja pokazuje
+postęp okresu ochronnego i wynik oceny jakości, odczytane z lokalnego backendu.
+Po spełnieniu warunków można wybrać **Włącz porządkowanie…**. Nadal wymagane
+jest wpisanie `AKTYWNY`; backend ponownie sprawdza warunki przed zmianą trybu.
+Brak danych o gotowości albo nieaktualny stan nie odblokowuje przycisku.
+
+Powrót do obserwacji wymaga potwierdzenia, ponieważ rozpoczyna nowy okres
+obserwacji i wyłącza trwałe usuwanie. Trwałe usuwanie pozostaje w osobnej,
+zwiniętej sekcji zaawansowanej i wymaga potwierdzenia `WLACZ`.
+
+Zmiana danych konta zatrzymuje automat, unieważnia dotychczasową próbę oraz
+przywraca tryb ochronny. Po zmianie trzeba wykonać nową próbę i świadomie
+włączyć harmonogram. Niepowodzenie konfiguracji uruchamia próbę przywrócenia
+poprzedniej konfiguracji, sekretu i automatu.
+
+## Pomoc i informacja zwrotna
+
+Pomoc prowadzi od problemu (brak ważnego e-maila, spam w Odebranych, problem
+z ochroną) do odpowiedniego działania. Dłuższe operacje pokazują opis działania
+oraz przycisk anulowania niezależnie od wybranej sekcji. Komunikaty błędów
+pozostają w widocznym pasku, z następnym działaniem i rozwijanym kodem dla pomocy.
+Raport diagnostyczny jest zapisywany na Biurku i nie jest nikomu wysyłany.
+
+## Lokalny podgląd dla projektowania i testów
+
+```bash
+bash scripts/preview-gui.sh healthy
+bash scripts/preview-gui.sh ready dark
+```
+
+Skrypt buduje izolowaną aplikację i wypisuje ścieżkę `.app`, którą można
+otworzyć w Finderze. Korzysta wyłącznie z demonstracyjnego backendu: nie
+łączy się z IMAP, pękiem kluczy, Rspamd ani launchd. Dostępne scenariusze:
+`healthy`, `active`, `ready`, `attention`, `critical`, `manual`, `unconfigured`,
+`empty`, `offline`. Drugi argument `dark` zmienia wygląd tylko podglądu.
+
+Testy mostu GUI i reguł prezentacji: `bash scripts/test-swift.sh`.
+Pełny zestaw kontroli projektu: `make check` (wymaga Go oraz narzędzi Apple).

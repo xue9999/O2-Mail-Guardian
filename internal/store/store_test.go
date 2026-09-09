@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -664,5 +665,49 @@ func TestLastRunTimesSeparatesAttemptFromSuccess(t *testing.T) {
 	attempt, success, err = db.LastRunTimes(ctx)
 	if err != nil || attempt == nil || success == nil {
 		t.Fatalf("unexpected successful-run times: attempt=%v success=%v err=%v", attempt, success, err)
+	}
+}
+
+func TestArchiveFilterRunsBeforePaginationAndStaysWithinAccount(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for i := 0; i < 15; i++ {
+		account, status := "mine@o2.pl", "quarantined"
+		if i%3 == 0 {
+			status = "review"
+		}
+		if i == 14 {
+			account = "other@o2.pl"
+			status = "review"
+		}
+		_, err := db.UpsertMessage(ctx, &Message{
+			Account: account, SourceFolder: "INBOX", CurrentFolder: "archive", UIDValidity: 1, UID: uint32(i + 1),
+			RawSHA256: fmt.Sprintf("hash-%d", i), Verdict: "spam", Status: status,
+			FirstSeen: now.Add(time.Duration(i) * time.Minute), LastScanned: now, ArchivePath: fmt.Sprintf("copy-%d.age", i),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := db.ArchivedPageFiltered(ctx, "mine@o2.pl", 2, 0, "review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.ArchivedPageFiltered(ctx, "mine@o2.pl", 2, 2, "review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 2 || len(second) != 2 || first[0].UID != 13 || first[1].UID != 10 || second[0].UID != 7 || second[1].UID != 4 {
+		t.Fatalf("filter or pagination failed: %+v / %+v", first, second)
+	}
+	for _, item := range append(first, second...) {
+		if item.Account != "mine@o2.pl" || item.Status != "review" {
+			t.Fatalf("foreign result: %+v", item)
+		}
 	}
 }

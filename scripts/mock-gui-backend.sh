@@ -18,6 +18,8 @@ mode="protect"
 purge="false"
 configured="true"
 first_dry_run="true"
+if [[ "${scenario}" == "active" ]]; then mode="active"; fi
+if [[ "${scenario}" == "manual" ]]; then automation="off"; fi
 
 if [[ "${scenario}" == "unconfigured" ]]; then
   configured="false"
@@ -59,7 +61,7 @@ success() {
 
 failure() {
   printf '{"protocol":1,"ok":false,"error":{"code":"%s","severity":"attention","message":"%s","recovery":"%s"}}\n' "$1" "$2" "$3"
-  exit 1
+  exit 0
 }
 
 read_request() {
@@ -70,28 +72,44 @@ command="${1:-}"
 shift || true
 case "${command}" in
   snapshot)
+    if [[ "${scenario}" == "offline" ]]; then
+      failure RSPAMD_UNAVAILABLE "Lokalny silnik nie odpowiada." "Sprawdź i napraw lokalną ochronę."
+    fi
     if [[ "${configured}" != "true" ]]; then
       success '{"configured":false,"health":"unconfigured","health_label":"Wymaga konfiguracji","recommendation":"Dokończ pierwszą konfigurację.","automation":"off","mode":"protect","purge_enabled":false,"summary":{},"trained_spam":0,"trained_ham":0,"required_spam":200,"required_ham":200,"first_dry_run":false,"app_autostart":false,"version":"0.3.0-test"}'
       exit 0
     fi
-    health="${scenario}"
+    health="healthy"
     health_label="Wszystko działa"
     recommendation="Nie musisz nic robić."
     if [[ "${automation}" == "off" ]]; then
       health="manual"; health_label="Tryb ręczny"; recommendation="Włącz automatyczne sprawdzanie albo uruchamiaj je ręcznie."
     elif [[ "${scenario}" == "attention" ]]; then
+      health="attention"
       health_label="Wymaga uwagi"; recommendation="Sprawdź teraz skrzynkę albo uruchom Napraw."
     elif [[ "${scenario}" == "critical" ]]; then
+      health="critical"
       health_label="Nie działa"; recommendation="Uruchom Napraw; automat nie zakończył pracy od ponad 48 godzin."
     fi
-    success "{\"configured\":true,\"health\":\"${health}\",\"health_label\":\"${health_label}\",\"recommendation\":\"${recommendation}\",\"automation\":\"${automation}\",\"mode\":\"${mode}\",\"purge_enabled\":${purge},\"last_attempt\":\"2026-08-22T12:34:00Z\",\"last_success\":\"2026-08-22T12:31:00Z\",\"stage\":\"complete\",\"summary\":{\"runs\":6,\"scanned\":84,\"kept\":71,\"rescued\":2,\"quarantined\":8,\"review\":3,\"errors\":0,\"waiting_quarantine\":18,\"waiting_review\":4,\"pending_moves\":1},\"trained_spam\":143,\"trained_ham\":126,\"required_spam\":200,\"required_ham\":200,\"first_dry_run\":${first_dry_run},\"app_autostart\":${app_autostart},\"version\":\"0.3.0-test\"}"
+    remaining=8
+    ready=false
+    quality=false
+    if [[ "${scenario}" == "ready" || "${mode}" == "active" ]]; then remaining=0; ready=true; quality=true; fi
+    progress_message="Oznacz pomyłki w folderach nauki, aby potwierdzić jakość decyzji."
+    if [[ "${ready}" == "true" ]]; then progress_message="Warunki spełnione. Możesz włączyć porządkowanie Odebranych."; fi
+    current_date="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    pending=0
+    if [[ "${scenario}" == "attention" ]]; then pending=1; fi
+    success "{\"protection\":{\"required_days\":14,\"remaining_days\":${remaining},\"period_complete\":${ready},\"quality_ready\":${quality},\"ready\":${ready},\"message\":\"${progress_message}\"},\"configured\":true,\"health\":\"${health}\",\"health_label\":\"${health_label}\",\"recommendation\":\"${recommendation}\",\"automation\":\"${automation}\",\"mode\":\"${mode}\",\"purge_enabled\":${purge},\"last_attempt\":\"${current_date}\",\"last_success\":\"${current_date}\",\"stage\":\"complete\",\"summary\":{\"runs\":6,\"scanned\":84,\"kept\":71,\"rescued\":2,\"quarantined\":8,\"review\":3,\"errors\":0,\"waiting_quarantine\":18,\"waiting_review\":4,\"pending_moves\":${pending}},\"trained_spam\":143,\"trained_ham\":126,\"required_spam\":200,\"required_ham\":200,\"first_dry_run\":${first_dry_run},\"app_autostart\":${app_autostart},\"version\":\"0.3.0-test\"}"
     ;;
   run)
     if [[ "${1:-}" == "dry-run" && "${configured}" == "true" ]]; then
       first_dry_run="true"
       save_state
     fi
-    success '{"completed":true}'
+    dry=false
+    if [[ "${1:-}" == "dry-run" ]]; then dry=true; fi
+    success "{\"completed\":true,\"summary\":{\"dry_run\":${dry},\"scanned\":24,\"kept\":18,\"rescued\":0,\"quarantined\":0,\"review\":6,\"errors\":0}}"
     ;;
   repair|doctor)
     success '{"completed":true}'
@@ -113,6 +131,19 @@ case "${command}" in
     case "${1:-}" in
       list)
         page="${2:-1}"
+        category="${3:-all}"
+        if [[ "${scenario}" == "empty" || "${category}" == "restored" ]]; then
+          success '{"page":1,"items":[],"has_next":false}'
+          exit 0
+        fi
+        if [[ "${category}" == "review" ]]; then
+          success '{"page":1,"items":[{"id":102,"date":"2026-08-19T13:07:00Z","verdict":"uncertain","status":"review"}],"has_next":false}'
+          exit 0
+        fi
+        if [[ "${category}" == "quarantined" ]]; then
+          success '{"page":1,"items":[{"id":104,"date":"2026-08-21T18:42:00Z","verdict":"spam","status":"quarantined"}],"has_next":false}'
+          exit 0
+        fi
         if [[ "${page}" == "1" ]]; then
           success '{"page":1,"items":[{"id":104,"date":"2026-08-21T18:42:00Z","verdict":"spam","status":"quarantined"},{"id":103,"date":"2026-08-20T09:15:00Z","verdict":"spam","status":"quarantined"},{"id":102,"date":"2026-08-19T13:07:00Z","verdict":"uncertain","status":"review"}],"has_next":true}'
         else

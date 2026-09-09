@@ -746,6 +746,12 @@ func (db *DB) Archived(ctx context.Context, account string, limit int) ([]Messag
 }
 
 func (db *DB) ArchivedPage(ctx context.Context, account string, limit, offset int) ([]Message, error) {
+	return db.ArchivedPageFiltered(ctx, account, limit, offset, "")
+}
+
+// Filter before pagination, never only the visible page. Keep every query
+// scoped to the account; headers are still decrypted only on explicit preview.
+func (db *DB) ArchivedPageFiltered(ctx context.Context, account string, limit, offset int, status string) ([]Message, error) {
 	if limit < 1 || limit > 1000 {
 		limit = 100
 	}
@@ -756,8 +762,8 @@ func (db *DB) ArchivedPage(ctx context.Context, account string, limit, offset in
 SELECT id,account,source_folder,current_folder,uidvalidity,uid,message_id_hash,raw_sha256,
  size_bytes,verdict,score,symbols_json,action,status,first_seen,last_scanned,
  quarantined_at,delete_after,archive_path,archive_until,feedback,feedback_intent,last_error
-FROM messages WHERE account=? AND archive_path<>'' ORDER BY first_seen DESC, id DESC LIMIT ? OFFSET ?`,
-		account, limit, offset)
+FROM messages WHERE account=? AND archive_path<>'' AND (?='' OR status=?) ORDER BY first_seen DESC, id DESC LIMIT ? OFFSET ?`,
+		account, status, status, limit, offset)
 	if err != nil {
 		return nil, err
 	}

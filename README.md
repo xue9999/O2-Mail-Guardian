@@ -14,8 +14,9 @@ załączników i nie wysyła treści wiadomości do usług chmurowych. Publiczna
 usługa fuzzy Rspamd jest wyłączona — skróty treści wiadomości również nie
 trafiają do zewnętrznej bazy fuzzy.
 
-> **Najważniejsze:** przez pierwsze 14 dni Guardian tylko obserwuje i
-> zabezpiecza pocztę. Trwałe usuwanie jest wyłączone. Nie zmieniaj ustawień
+> **Najważniejsze:** przez pierwsze 14 dni Guardian nie przenosi automatycznie
+> wiadomości z Odebranych. Wiadomości z folderu SPAM mogą trafiać do
+> `AI-Do-sprawdzenia`, a Twoje korekty są przetwarzane. Trwałe usuwanie jest wyłączone. Nie zmieniaj ustawień
 > zaawansowanych, dopóki aplikacja nie potwierdzi zakończenia okresu obserwacji
 > i wszystkich kontroli jakości.
 
@@ -79,7 +80,7 @@ ręcznie tylko wtedy, gdy automat wykrył go błędnie. Hasło płynie do backen
 wyłącznie przez stdin i trafia do pęku
 kluczy macOS; nie pojawia się w argumentach, konfiguracji, odpowiedzi JSON ani
 logu. Automat co 2 godziny zostanie włączony dopiero po udanej próbie i
-kliknięciu **Włącz ochronę co 2 godziny**. Alternatywnie można zakończyć
+kliknięciu **Włącz sprawdzanie co 2 godziny**. Alternatywnie można zakończyć
 kreator w trybie ręcznym; wtedy nic nie działa w tle, a sprawdzenie uruchamiasz
 samodzielnie z pulpitu aplikacji.
 
@@ -90,9 +91,11 @@ nie jest przenoszone na zmienioną konfigurację.
 ### 4. Otwieraj aplikację
 
 Po instalacji aplikację znajdziesz w folderze **Aplikacje** w swoim katalogu
-domowym. Ma normalne okno i ikonę w pasku menu. Pokazuje jeden z trzech stanów:
-**Wszystko działa**, **Wymaga uwagi** albo **Nie działa**, a pod nim jedno
-zalecane działanie.
+domowym. Ma normalne okno i ikonę w pasku menu. Wyraźnie odróżnia
+**Odebrane pod obserwacją**, **Porządkowanie jest włączone**, tryb ręczny
+oraz stany wymagające uwagi. Przegląd pokazuje efekty sprawdzania, następne
+działanie i postęp przygotowania do porządkowania. Szczegóły nowego interfejsu
+znajdziesz w [instrukcji panelu](docs/GUI-I-PIERWSZE-KROKI.md).
 
 Dwukrotne kliknięcie **`Guardian.command`** również otwiera aplikację. Dwa
 dodatkowe skróty pozostają interfejsem awaryjnym:

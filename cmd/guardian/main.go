@@ -853,33 +853,39 @@ func compareBayesHighWater(ctx context.Context, db *store.DB, account string, st
 }
 
 func (a *application) runCommand(args []string) error {
+	_, err := a.runCommandResult(args)
+	return err
+}
+
+// Return the exact run to the GUI; a daily aggregate cannot describe a dry-run.
+func (a *application) runCommandResult(args []string) (*store.Run, error) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(a.errOut)
 	dryRun := fs.Bool("dry-run", false, "tylko pokaż decyzje")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return nil, err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("polecenie sprawdzania nie przyjmuje dodatkowego tekstu; uruchom Guardian bez polecenia i wybierz działanie z menu")
+		return nil, errors.New("polecenie sprawdzania nie przyjmuje dodatkowego tekstu; uruchom Guardian bez polecenia i wybierz działanie z menu")
 	}
 	cfg, err := config.Load(a.configPath)
 	if err != nil {
-		return fmt.Errorf("%w\nOtwórz menu i rozpocznij pierwszą konfigurację", err)
+		return nil, fmt.Errorf("%w\nOtwórz menu i rozpocznij pierwszą konfigurację", err)
 	}
 	lock, err := acquireRunLock(cfg.Runtime.DataDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer lock.Close()
 	rt, cleanup, err := a.openRuntime(true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer cleanup()
 	if !*dryRun {
 		rolledBack, continuityErr := a.ensureBayesContinuity(context.Background(), rt)
 		if continuityErr != nil {
-			return continuityErr
+			return nil, continuityErr
 		}
 		if rolledBack {
 			a.warning("Wykryto cofnięcie lokalnego modelu Bayesa. Włączono tryb ochronny i wyłączono trwałe usuwanie.")
@@ -894,11 +900,11 @@ func (a *application) runCommand(args []string) error {
 		if !*dryRun && os.Getenv("GUARDIAN_SERVICE_RUNNER") != "1" {
 			a.maybeNotifyRunFailure(rt.db)
 		}
-		return err
+		return nil, err
 	}
 	if *dryRun {
 		if err := rt.db.SetSetting(context.Background(), "first_dry_run_completed_at", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
-			return fmt.Errorf("próba się udała, ale nie zapisano jej potwierdzenia: %w", err)
+			return nil, fmt.Errorf("próba się udała, ale nie zapisano jej potwierdzenia: %w", err)
 		}
 	}
 	if !*dryRun {
@@ -925,7 +931,7 @@ func (a *application) runCommand(args []string) error {
 	if !*dryRun {
 		a.maybeNotify(rt.db)
 	}
-	return nil
+	return run, nil
 }
 
 func (a *application) statusCommand(args []string) error {
