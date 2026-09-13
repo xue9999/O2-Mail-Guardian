@@ -2,7 +2,9 @@
 
 ## Pierwsza konfiguracja — trzy kroki
 
-1. **Konto:** wpisz adres o2 i osobne hasło aplikacyjne. Przycisk **Połącz i
+1. **Konto:** rozwiń instrukcję przygotowania konta (IMAP, logowanie
+   dwustopniowe i hasło aplikacyjne), następnie wpisz adres o2 i osobne hasło
+   aplikacyjne. Podczas sprawdzania połączenia dane nie są edytowalne. Przycisk **Połącz i
    wykryj ustawienia** sprawdza konto i bezpieczne połączenie. Instrukcja
    tworzenia hasła jest dostępna przy formularzu; hasło zostanie zapisane
    w pęku kluczy macOS.
@@ -43,6 +45,7 @@ Włączenie porządkowania nie włącza trwałego usuwania.
 
 Pulpit pokazuje stan, jedno główne działanie oraz osobno:
 
+- zadania użytkownika przed statystykami;
 - wyniki ostatnich 24 godzin (bez doliczania próbnych skanowań);
 - wynik ostatniego sprawdzenia uruchomionego w tej sesji;
 - wiadomości do oceny i przypadki wymagające naprawy;
@@ -60,7 +63,10 @@ W poczcie o2 przenieś wiadomość do:
 - `AI-Naucz-wazne`, jeśli to prawidłowa wiadomość;
 - `AI-Naucz-spam`, jeśli to spam.
 
-Aplikacja objaśnia oba przypadki i pozwala skopiować nazwę folderu. Przycisk
+Wersja 0.5.0 prowadzi przez trzy kroki: otwarcie poczty, przeniesienie wiadomości
+i przetworzenie korekt. Przycisk **Otwórz pocztę o2** otwiera stronę poczty
+w przeglądarce; użytkownik sam wybiera folder. Aplikacja objaśnia oba przypadki
+i pozwala skopiować nazwę folderu z krótkim potwierdzeniem **Skopiowano**. Przycisk
 **Sprawdź pocztę i przetwórz korekty** uruchamia pełne sprawdzenie, zgodnie
 z bieżącym trybem. Przy wyłączonym automacie należy uruchomić je ręcznie.
 
@@ -68,14 +74,22 @@ z bieżącym trybem. Przy wyłączonym automacie należy uruchomić je ręcznie.
 
 Kategorie **Wszystkie kopie**, **Kwarantanna**, **Do sprawdzenia** i
 **Przywrócone** filtrują całe archiwum danego konta przed podziałem na strony.
-Każda strona zawiera do 10 wpisów. Lista celowo nie odszyfrowuje tematów
+Każda strona zawiera do 10 wpisów. Opcja **Zawęź datę pierwszego zapisu**
+pozwala wybrać daty **Od** i **Do**. Kliknij **Zastosuj daty**, aby odczytać
+wyniki z całego archiwum. Dzień końcowy jest uwzględniony w całości, w lokalnej
+strefie czasu Maca. Pod datami widzisz zastosowany zakres. Wyłączenie opcji
+przywraca wszystkie daty; każda zmiana zastosowanego filtra wraca do strony 1.
+To daty pierwszego zapisu przez Guardiana, a nie daty wysłania wiadomości. Lista celowo nie odszyfrowuje tematów
 wiadomości automatycznie.
 
-1. Wybierz kopię według daty i stanu.
+1. Wybierz kopię według daty pierwszego zapisu i stanu.
 2. Kliknij **Pokaż nadawcę i temat**. Obok listy zobaczysz wyłącznie oczyszczone
    nagłówki: nadawcę, temat i datę.
 3. Kliknij **Przywróć wiadomość** i potwierdź przywrócenie do
    `AI-Do-sprawdzenia` w poczcie o2.
+
+Przyciski **Poprzednia kopia** i **Następna kopia** przechodzą między wpisami
+na bieżącej stronie. Nagłówki każdej kolejnej kopii odsłaniasz osobno.
 
 Zmiana wyboru, strony lub kategorii unieważnia podgląd i możliwość przywrócenia
 poprzedniej kopii. Treść, HTML, linki i załączniki nie są renderowane. Pusta
@@ -89,7 +103,13 @@ niezależnego automatu.
 
 Przenoszenie nie jest ukryte w ustawieniach zaawansowanych. Jego sekcja pokazuje
 postęp okresu ochronnego i wynik oceny jakości, odczytane z lokalnego backendu.
-Po spełnieniu warunków można wybrać **Włącz porządkowanie…**. Nadal wymagane
+Rozwijane **Warunki jakości** pokazują pięć wymagań i dane z bieżącego okresu:
+co najmniej jedno potwierdzenie spamu, minimum 90% zgodności wcześniejszych
+ocen spamu, brak potwierdzonych błędnych ocen ważnej poczty i spamu oraz
+znaną wcześniejszą decyzję dla potwierdzonego spamu. Nie należy oznaczać
+prawidłowych wiadomości jako spam, aby odblokować automat. Brak zgłoszonych
+pomyłek nie stanowi gwarancji bezbłędności. Po spełnieniu warunków można wybrać
+**Włącz porządkowanie…**. Nadal wymagane
 jest wpisanie `AKTYWNY`; backend ponownie sprawdza warunki przed zmianą trybu.
 Brak danych o gotowości albo nieaktualny stan nie odblokowuje przycisku.
 
@@ -101,6 +121,17 @@ Zmiana danych konta zatrzymuje automat, unieważnia dotychczasową próbę oraz
 przywraca tryb ochronny. Po zmianie trzeba wykonać nową próbę i świadomie
 włączyć harmonogram. Niepowodzenie konfiguracji uruchamia próbę przywrócenia
 poprzedniej konfiguracji, sekretu i automatu.
+
+## Klawiatura i dostępność
+
+Menu **Przejdź** udostępnia skróty **⌘1–⌘5**: Przegląd, Nauka i korekty,
+Odzyskiwanie, Ustawienia i Pomoc. Podczas pierwszej konfiguracji skróty są
+wyłączone. Etykiety dla czytnika ekranu wskazują nazwę kopiowanego folderu,
+stan każdego warunku jakości i skutek zmiany wybranej kopii.
+
+Jeśli aktywacja porządkowania się nie powiedzie, jej okno pozostaje otwarte
+z błędem i wskazówką. Wpisane potwierdzenie pozostaje dostępne do ponowienia
+próby; backend za każdym razem ponownie sprawdza gotowość.
 
 ## Pomoc i informacja zwrotna
 

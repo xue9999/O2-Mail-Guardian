@@ -578,11 +578,11 @@ func (a *application) apiArchive(args []string) (any, error) {
 		}
 	}
 	if args[0] == "list" {
-		if len(args) > 3 {
-			return nil, errors.New("użyj archive list [strona] [all|quarantined|review|restored]")
+		if len(args) > 5 || len(args) == 4 {
+			return nil, errors.New("użyj archive list [strona] [all|quarantined|review|restored] [od-RFC3339 do-RFC3339]")
 		}
 		status := ""
-		if len(args) == 3 {
+		if len(args) >= 3 {
 			switch args[2] {
 			case "all":
 			case "quarantined", "review", "restored":
@@ -591,12 +591,20 @@ func (a *application) apiArchive(args []string) (any, error) {
 				return nil, errors.New("nieznana kategoria kopii")
 			}
 		}
+		var start, end time.Time
+		if len(args) == 5 {
+			var err error
+			start, end, err = archiveDateRange(args[3], args[4])
+			if err != nil {
+				return nil, err
+			}
+		}
 		rt, cleanup, err := a.openRuntime(false)
 		if err != nil {
 			return nil, err
 		}
 		defer cleanup()
-		items, err := rt.db.ArchivedPageFiltered(context.Background(), rt.cfg.Account.Email, 11, (page-1)*10, status)
+		items, err := rt.db.ArchivedPageInRange(context.Background(), rt.cfg.Account.Email, 11, (page-1)*10, status, start, end)
 		if err != nil {
 			return nil, err
 		}
@@ -788,4 +796,14 @@ func redactedDiagnosticFailure(err error) apiFailure {
 		failure.Recovery = "Uruchom Sprawdź i napraw; dołącz ten raport, jeśli problem pozostanie."
 	}
 	return failure
+}
+
+// Accept explicit instants so GUI calendar days retain the user's timezone.
+func archiveDateRange(from, until string) (time.Time, time.Time, error) {
+	start, startErr := time.Parse(time.RFC3339, from)
+	end, endErr := time.Parse(time.RFC3339, until)
+	if startErr != nil || endErr != nil || !start.Before(end) {
+		return time.Time{}, time.Time{}, errors.New("wybierz prawidłowy zakres dat: początek musi poprzedzać koniec")
+	}
+	return start, end, nil
 }

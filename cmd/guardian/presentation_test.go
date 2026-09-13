@@ -108,3 +108,28 @@ func TestProtectionProgressReadyAgreesWithTheActivationGate(t *testing.T) {
 		t.Fatalf("reset bypassed observation: %+v", got)
 	}
 }
+
+func TestQualityChecklistAgreesWithAuthoritativeGate(t *testing.T) {
+	for _, q := range []store.ActivationQuality{
+		{}, {SpamFeedback: 10, SpamPreviouslySpam: 9},
+		{SpamFeedback: 10, SpamPreviouslySpam: 8},
+		{SpamFeedback: 10, SpamPreviouslySpam: 10, FalsePositives: 1},
+		{SpamFeedback: 10, SpamPreviouslySpam: 10, FalseRescues: 1},
+		{SpamFeedback: 10, SpamPreviouslySpam: 10, SpamUnexplained: 1},
+	} {
+		all := true
+		checks := qualityChecks(q)
+		if len(checks) != 5 {
+			t.Fatalf("missing conditions: %+v", checks)
+		}
+		for _, check := range checks {
+			all = all && check.Passed
+			if check.Detail == "" {
+				t.Fatal("missing explanation")
+			}
+		}
+		if all != q.Ready() {
+			t.Fatalf("checklist contradicts activation gate: %+v", q)
+		}
+	}
+}

@@ -1,6 +1,13 @@
 import AppKit
 import SwiftUI
 
+struct QualityCheck: Codable, Identifiable {
+    var id: String
+    var title: String
+    var detail: String
+    var passed: Bool
+}
+
 struct ProtectionProgress: Codable {
     var requiredDays: Int
     var remainingDays: Int
@@ -8,6 +15,7 @@ struct ProtectionProgress: Codable {
     var qualityReady: Bool
     var ready: Bool
     var message: String
+    var qualityChecks: [QualityCheck]? = nil
 }
 
 struct ScanOutcome: Codable {
@@ -205,6 +213,23 @@ struct ProtectionProgressView: View {
                 Label(progress.qualityReady ? "Jakość decyzji potwierdzona" : "Potrzebne potwierdzenie jakości decyzji", systemImage: progress.qualityReady ? "checkmark.circle.fill" : "circle.dashed")
                     .font(.callout).foregroundStyle(progress.qualityReady ? GuardianStyle.accent : .secondary)
                 Text(progress.message).font(.callout).foregroundStyle(.secondary)
+                if let checks = progress.qualityChecks, !checks.isEmpty {
+                    DisclosureGroup("Warunki jakości: \(checks.filter { $0.passed }.count) z \(checks.count) spełnionych") {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("Ocena dotyczy bieżącego okresu obserwacji i Twoich potwierdzeń. Brak zgłoszonych pomyłek nie jest gwarancją bezbłędnego działania.")
+                                .font(.callout).foregroundStyle(.secondary)
+                            ForEach(checks) { check in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Label(check.title, systemImage: check.passed ? "checkmark.circle.fill" : "circle.dashed")
+                                        .foregroundStyle(check.passed ? GuardianStyle.accent : .primary)
+                                    Text(check.detail).font(.callout).foregroundStyle(.secondary)
+                                }.accessibilityElement(children: .ignore)
+                                    .accessibilityLabel("\(check.title). \(check.passed ? "Warunek spełniony" : "Warunek niespełniony"). \(check.detail)")
+                            }
+                        }.padding(.top, 10)
+                    }
+                }
+
             } else {
                 Text("Przenoszenie wymaga zakończenia okresu obserwacji i potwierdzenia jakości decyzji. Odśwież stan, aby sprawdzić gotowość.").foregroundStyle(.secondary)
             }
@@ -249,7 +274,7 @@ struct DashboardView: View {
     @State private var showDetails = false
     private var presentation: ProtectionPresentation { ProtectionPresentation(model.snapshot, stale: model.snapshotIsStale) }
     var body: some View {
-        GuardianPage(eyebrow: "Twoja poczta, pod kontrolą", title: "Przegląd ochrony", subtitle: "Najważniejsze informacje w jednym miejscu.") {
+        GuardianPage(eyebrow: "Twoja poczta, pod kontrolą", title: "Twoja poczta", subtitle: "") {
             VStack(alignment: .leading, spacing: 20) {
                 HStack(alignment: .top, spacing: 16) {
                     Image(systemName: presentation.symbol).font(.system(size: 27)).frame(width: 56, height: 56)
@@ -271,14 +296,11 @@ struct DashboardView: View {
                     Spacer()
                 }.controlSize(.large).disabled(model.busy)
                 Divider()
-                if model.snapshot.mode == "protect", let progress = model.snapshot.protection {
-                    HStack {
-                        Text(progress.ready ? "Możesz już włączyć porządkowanie" : "Obserwacja: \(max(0, progress.requiredDays - progress.remainingDays)) z \(progress.requiredDays) dni")
-                            .font(.callout.weight(.medium))
-                        Spacer()
-                        Button("Zobacz warunki", systemImage: "arrow.right") { model.section = .settings }.buttonStyle(.link)
-                    }
-                }
+                HStack(alignment: .top) {
+                    Label("Ostatni sukces: \(friendlyDate(model.snapshot.lastSuccess))", systemImage: "checkmark.circle")
+                    Spacer()
+                    Label(model.snapshot.automation == "on" ? "Automatycznie co 2 godziny" : "Sprawdzanie ręczne", systemImage: "clock")
+                }.font(.callout).foregroundStyle(.secondary)
                 Label(model.snapshot.purgeEnabled ? "Trwałe usuwanie włączone — z kontrolami bezpieczeństwa" : "Trwałe usuwanie wyłączone", systemImage: model.snapshot.purgeEnabled ? "exclamationmark.circle" : "lock.fill")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
@@ -286,6 +308,33 @@ struct DashboardView: View {
                 .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(presentation.tone.opacity(0.16)))
 
             if let scan = model.lastScan { ScanOutcomeView(outcome: scan) }
+            if model.snapshot.summary.waitingReview > 0 || model.snapshot.summary.pendingMoves > 0 {
+                GuardianCard {
+                    Label("Twoje następne działanie", systemImage: "tray.full").font(.headline)
+                    if model.snapshot.summary.waitingReview > 0 {
+                        Text("Wiadomości do Twojej oceny: \(model.snapshot.summary.waitingReview). Znajdziesz je w poczcie o2, w folderze AI-Do-sprawdzenia.")
+                        Button("Przejdź do oceny wiadomości", systemImage: "arrow.right") { model.section = .learning }
+                    }
+                    if model.snapshot.summary.pendingMoves > 0 {
+                        Text("Guardian weryfikuje przerwane operacje: \(model.snapshot.summary.pendingMoves). Nie uruchamiaj ich ponownie ręcznie; skorzystaj z naprawy.").font(.callout).foregroundStyle(.secondary)
+                        Button("Sprawdź i napraw") { Task { await model.repair() } }.disabled(model.busy)
+                    }
+                }
+            }
+            if model.snapshot.configured && model.snapshot.health == "healthy" && !model.snapshotIsStale && model.snapshot.summary.waitingReview == 0 && model.snapshot.summary.pendingMoves == 0 {
+                Label(model.snapshot.automation == "on" ? "Nie masz teraz wiadomości do oceny według ostatnich zapisów." : "Nie masz zapisanych wiadomości do oceny. Kolejne sprawdzenie uruchom ręcznie.", systemImage: "checkmark.circle")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            if model.snapshot.mode == "protect" {
+                GuardianCard {
+                    ProtectionProgressView(model: model)
+                    HStack {
+                        Button(model.snapshot.protection?.ready == true ? "Przejdź do włączenia porządkowania" : "Zobacz ustawienia ochrony") { model.section = .settings }
+                        Button("Jak pomóc w nauce") { model.section = .learning }
+                    }
+                    Text("Podczas obserwacji wiadomości z folderu SPAM mogą trafiać do AI-Do-sprawdzenia. Guardian przetwarza też Twoje korekty.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Ostatnie 24 godziny").font(.headline)
@@ -298,41 +347,7 @@ struct DashboardView: View {
                     metric("Zatrzymany spam", value: model.snapshot.summary.quarantined, symbol: "shield.lefthalf.filled", detail: "przeniesienia do kwarantanny")
                 }
             }
-            if model.snapshot.summary.waitingReview > 0 || model.snapshot.summary.pendingMoves > 0 {
-                GuardianCard {
-                    Label("Warto sprawdzić", systemImage: "tray.full").font(.headline)
-                    if model.snapshot.summary.waitingReview > 0 {
-                        Text("Wiadomości do Twojej oceny: \(model.snapshot.summary.waitingReview). Znajdziesz je w poczcie o2, w folderze AI-Do-sprawdzenia.")
-                        Button("Jak sprawdzić i poprawić decyzję", systemImage: "arrow.right") { model.section = .learning }
-                    }
-                    if model.snapshot.summary.pendingMoves > 0 {
-                        Text("Guardian weryfikuje przerwane operacje: \(model.snapshot.summary.pendingMoves). Nie uruchamiaj ich ponownie ręcznie; skorzystaj z naprawy.").font(.callout).foregroundStyle(.secondary)
-                        Button("Sprawdź i napraw") { Task { await model.repair() } }.disabled(model.busy)
-                    }
-                }
-            }
-            if model.snapshot.mode == "protect" {
-                GuardianCard {
-                    ProtectionProgressView(model: model)
-                    HStack {
-                        Button(model.snapshot.protection?.ready == true ? "Przejdź do włączenia porządkowania" : "Zobacz ustawienia ochrony") { model.section = .settings }
-                        Button("Jak pomóc w nauce") { model.section = .learning }
-                    }
-                    Text("Podczas obserwacji wiadomości z folderu SPAM mogą trafiać do AI-Do-sprawdzenia. Guardian przetwarza też Twoje korekty.").font(.caption).foregroundStyle(.secondary)
-                }
-            }
             GuardianCard {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Ostatnie udane sprawdzenie").font(.caption).foregroundStyle(.secondary)
-                        Text(friendlyDate(model.snapshot.lastSuccess)).font(.callout.weight(.medium))
-                    }
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 6) {
-                        Text("Harmonogram").font(.caption).foregroundStyle(.secondary)
-                        Text(model.snapshot.automation == "on" ? "Co 2 godziny" : "Na żądanie").font(.callout.weight(.medium))
-                    }
-                }
                 DisclosureGroup("Szczegóły działania", isExpanded: $showDetails) {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Ostatnia próba: \(friendlyDate(model.snapshot.lastAttempt))")
@@ -349,9 +364,9 @@ struct DashboardView: View {
     }
     private func metric(_ title: String, value: Int, symbol: String, detail: String) -> some View {
         GuardianCard {
-            Label(title, systemImage: symbol).font(.callout).foregroundStyle(.secondary).frame(minHeight: 32, alignment: .topLeading)
-            Text(value, format: .number).font(.system(size: 32, weight: .semibold, design: .rounded)).monospacedDigit()
-            Text(detail).font(.caption).foregroundStyle(.secondary).frame(minHeight: 30, alignment: .topLeading)
+            Label(title, systemImage: symbol).font(.callout).foregroundStyle(.secondary)
+            Text(value, format: .number).font(.system(size: 26, weight: .semibold, design: .rounded)).monospacedDigit()
+            Text(detail).font(.caption).foregroundStyle(.secondary)
         }.accessibilityElement(children: .combine)
     }
 }
@@ -389,7 +404,7 @@ struct OperationFeedback: View {
                     ProgressView().controlSize(.small)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(model.operationTitle).font(.callout.weight(.medium))
-                        Text("Możesz bezpiecznie anulować i wrócić później.").font(.caption).foregroundStyle(.secondary)
+                        Text("Możesz anulować. Wcześniej zakończone kroki pozostaną zapisane.").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Button("Anuluj") { model.cancel() }

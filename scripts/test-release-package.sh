@@ -40,6 +40,14 @@ expected=$'Install.command\nLICENSE\nZACZNIJ-TUTAJ.txt'
 [[ -f "${package_root}/.payload/scripts/install-core.sh" ]]
 [[ -f "${package_root}/.payload/macos/Sources/O2MailGuardianApp/O2MailGuardianApp.swift" ]]
 [[ -f "${package_root}/.payload/LICENSE" ]]
+[[ -f "${package_root}/.payload/CHANGELOG.md" ]]
+/usr/bin/cmp "${PROJECT_DIR}/VERSION" "${package_root}/.payload/VERSION"
+/usr/bin/cmp "${PROJECT_DIR}/macos/Sources/O2MailGuardianApp/GuardianDesign.swift" "${package_root}/.payload/macos/Sources/O2MailGuardianApp/GuardianDesign.swift"
+/usr/bin/cmp "${PROJECT_DIR}/macos/Sources/O2MailGuardianApp/GuardianWorkflows.swift" "${package_root}/.payload/macos/Sources/O2MailGuardianApp/GuardianWorkflows.swift"
+release_version="$(/usr/bin/tr -d '[:space:]' < "${PROJECT_DIR}/VERSION")"
+bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${package_root}/.payload/macos/Info.plist")"
+[[ "${release_version}" == "${bundle_version}" ]]
+
 [[ ! -e "${package_root}/.payload/macos/Tests" ]]
 /usr/bin/grep -Fq -- '--self-test' "${package_root}/.payload/scripts/install-core.sh"
 /usr/bin/grep -Fq 'Control' "${package_root}/ZACZNIJ-TUTAJ.txt"
@@ -57,4 +65,45 @@ XDG_CONFIG_HOME="${PACKAGE_TEST_HOME}/config" \
 GUARDIAN_INSTALL_SELF_TEST=1 \
 /bin/bash "${package_root}/Install.command" >/dev/null
 
+source "$PROJECT_DIR/scripts/release-common.sh"
+verify_release "$package_root/.payload" "$release_version"
+verify_prebuilt "$package_root/.payload" "$release_version"
+(cd "$DIST_DIR"; /usr/bin/shasum -a 256 -c "$(basename "$archive").sha256")
+bash "$PROJECT_DIR/scripts/test-install-prebuilt.sh" "$package_root"
+# Mutation cases use the same verified extraction and restore each changed file.
+payload="$package_root/.payload"
+cp "$payload/RELEASE-MANIFEST" "$TEST_ROOT/manifest"
+printf '#!/bin/bash\nprintf unexpected > "$HOME/external-called"\nexit 95\n' > "$PACKAGE_TEST_HOME/driver.sh"
+for mutation in missing corrupt version arch marker manifest extra executable; do
+  case "$mutation" in
+    missing) mv "$payload/prebuilt/guardian" "$TEST_ROOT/guardian" ;;
+    corrupt) cp "$payload/prebuilt/guardian" "$TEST_ROOT/guardian"; printf x >> "$payload/prebuilt/guardian" ;;
+    version) printf '9.9.9\n' > "$payload/VERSION" ;;
+    arch) /usr/bin/sed 's/architecture=arm64/architecture=x86_64/' "$TEST_ROOT/manifest" > "$payload/RELEASE-MANIFEST" ;;
+    marker) mv "$payload/DISTRIBUTION" "$TEST_ROOT/distribution" ;;
+    manifest) mv "$payload/RELEASE-MANIFEST" "$TEST_ROOT/missing-manifest" ;;
+    executable)
+      cp "$payload/prebuilt/guardian" "$TEST_ROOT/guardian"
+      printf '#!/bin/bash\nexit 96\n' > "$payload/prebuilt/guardian"
+      release_manifest "$payload" "$release_version" > "$payload/RELEASE-MANIFEST" ;;
+    extra) touch "$payload/unlisted-file" ;;
+  esac
+  if HOME="$PACKAGE_TEST_HOME" XDG_CONFIG_HOME="$PACKAGE_TEST_HOME/config" GUARDIAN_SKIP_PAUSE=1 \
+    GUARDIAN_INSTALL_INTEGRATION_TEST=1 GUARDIAN_INSTALL_TEST_DRIVER="$PACKAGE_TEST_HOME/driver.sh" \
+    /bin/bash "$payload/scripts/install-core.sh" > "$TEST_ROOT/rejected" 2>&1; then
+    printf 'Uszkodzona paczka została przyjęta: %s\n' "$mutation" >&2; exit 1
+  fi
+  [[ ! -e "$PACKAGE_TEST_HOME/external-called" ]]
+  grep -Eq 'Paczka jest niekompletna|Gotowe programy nie przeszły' "$TEST_ROOT/rejected"
+  case "$mutation" in
+    missing|corrupt) mv "$TEST_ROOT/guardian" "$payload/prebuilt/guardian" ;;
+    version) cp "$PROJECT_DIR/VERSION" "$payload/VERSION" ;;
+    arch) cp "$TEST_ROOT/manifest" "$payload/RELEASE-MANIFEST" ;;
+    marker) mv "$TEST_ROOT/distribution" "$payload/DISTRIBUTION" ;;
+    manifest) mv "$TEST_ROOT/missing-manifest" "$payload/RELEASE-MANIFEST" ;;
+    executable) mv "$TEST_ROOT/guardian" "$payload/prebuilt/guardian"; cp "$TEST_ROOT/manifest" "$payload/RELEASE-MANIFEST" ;;
+    extra) /bin/rm "$payload/unlisted-file" ;;
+  esac
+done
+verify_release "$payload" "$release_version"
 printf 'Prosta paczka wydania: OK\n'

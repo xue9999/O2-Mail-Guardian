@@ -13,6 +13,15 @@ UI_SERVICE_PLIST="${HOME}/Library/LaunchAgents/pl.o2.mail-guardian-ui.plist"
 APP_PARENT="${HOME}/Applications"
 APP_DIR="${APP_PARENT}/O2 Mail Guardian.app"
 VERSION_FILE="${PROJECT_DIR}/VERSION"
+source "${PROJECT_DIR}/scripts/install-lock.sh"
+install_lock_acquire || exit 1
+trap install_lock_release EXIT
+source "${PROJECT_DIR}/scripts/release-common.sh"
+source "${PROJECT_DIR}/scripts/install-runtime.sh"
+DISTRIBUTION=source
+if [[ "$(basename "$PROJECT_DIR")" == .payload || -e "$PROJECT_DIR/DISTRIBUTION" || -e "$PROJECT_DIR/prebuilt" ]]; then
+  DISTRIBUTION=prebuilt
+fi
 
 [[ -f "${VERSION_FILE}" ]] || {
   printf '%s\n' "Błąd: w paczce brakuje pliku VERSION." >&2
@@ -43,6 +52,9 @@ HAD_BIN=0
 UI_PLIST_SWITCHED=0
 HAD_UI_PLIST=0
 SERVICE_SUSPENDED=0
+UI_SUSPENDED=0
+ROLLBACK_FAILED=0
+INSTALL_RESULT=success
 FAIL_IN_PROGRESS=0
 CURRENT_STAGE="przygotowanie instalacji"
 
@@ -100,6 +112,7 @@ safe_remove_temp() {
   esac
 }
 cleanup_temporary_files() {
+  (( ROLLBACK_FAILED == 0 )) || return 0
   safe_remove_temp "${DEPLOY_STAGE}"
   safe_remove_temp "${DEPLOY_BACKUP_ROOT}"
   safe_remove_temp "${BUILD_TMP}"
@@ -113,19 +126,20 @@ rollback_deploy() {
   local failed_root=""
   if [[ -d "${RUNTIME_DIR}/deploy" ]]; then
     if [[ "${GUARDIAN_INSTALL_SELF_TEST:-0}" != "1" ]]; then
-      GUARDIAN_RUNTIME_DIR="${RUNTIME_DIR}" docker --context colima compose \
+      GUARDIAN_RUNTIME_DIR="${RUNTIME_DIR}" install_external compose --context colima compose \
         --project-name o2-mail-guardian --file "${RUNTIME_DIR}/deploy/compose.yaml" \
         down --remove-orphans >/dev/null 2>&1 || true
     fi
-    failed_root="$(/usr/bin/mktemp -d "${RUNTIME_DIR}/.deploy-failed.XXXXXX")"
-    /bin/mv "${RUNTIME_DIR}/deploy" "${failed_root}/deploy"
+    failed_root="$(/usr/bin/mktemp -d "${RUNTIME_DIR}/.deploy-failed.XXXXXX")" || return 1
+    /bin/mv "${RUNTIME_DIR}/deploy" "${failed_root}/deploy" || return 1
   fi
-  if (( HAD_DEPLOY == 1 )) && [[ -d "${DEPLOY_BACKUP}" ]]; then
-    /bin/mv "${DEPLOY_BACKUP}" "${RUNTIME_DIR}/deploy"
+  if (( HAD_DEPLOY == 1 )); then
+    [[ -d "${DEPLOY_BACKUP}" ]] || return 1
+    /bin/mv "${DEPLOY_BACKUP}" "${RUNTIME_DIR}/deploy" || return 1
     yellow "Przywrócono poprzednią konfigurację lokalnego silnika."
     if [[ "${GUARDIAN_INSTALL_SELF_TEST:-0}" != "1" ]]; then
-      GUARDIAN_SKIP_PAUSE=1 /bin/bash "${PROJECT_DIR}/scripts/02-uruchom-silnik.command" >/dev/null 2>&1 \
-        || yellow "Poprzedni silnik wymaga ponownego uruchomienia przez przycisk Napraw."
+      GUARDIAN_SKIP_PAUSE=1 install_external start-stack >/dev/null 2>&1 \
+        || return 1
     fi
   fi
   safe_remove_temp "${failed_root}"
@@ -134,58 +148,83 @@ rollback_deploy() {
 rollback_application() {
   (( APP_SWITCHED == 1 )) || return 0
   if [[ -d "${APP_DIR}" ]]; then
-    /bin/mv "${APP_DIR}" "${APP_STAGE_ROOT}/failed.app" 2>/dev/null || /bin/rm -rf -- "${APP_DIR}"
+    /bin/mv "${APP_DIR}" "${APP_STAGE_ROOT}/failed.app" || return 1
   fi
-  if (( HAD_APP == 1 )) && [[ -d "${APP_BACKUP}" ]]; then
-    /bin/mv "${APP_BACKUP}" "${APP_DIR}"
+  if (( HAD_APP == 1 )); then
+    [[ -d "${APP_BACKUP}" ]] || return 1
+    /bin/mv "${APP_BACKUP}" "${APP_DIR}" || return 1
     yellow "Przywrócono poprzednią aplikację."
   fi
   APP_SWITCHED=0
 }
 rollback_binary() {
   (( BIN_SWITCHED == 1 )) || return 0
-  if (( HAD_BIN == 1 )) && [[ -f "${BIN_ROLLBACK}" ]]; then
-    /bin/mv -f "${BIN_ROLLBACK}" "${GUARDIAN_BIN}"
+  if (( HAD_BIN == 1 )); then
+    [[ -f "${BIN_ROLLBACK}" ]] || return 1
+    /bin/mv -f "${BIN_ROLLBACK}" "${GUARDIAN_BIN}" || return 1
     yellow "Przywrócono poprzedni silnik Guardian."
   else
-    /bin/rm -f -- "${GUARDIAN_BIN}"
+    /bin/rm -f -- "${GUARDIAN_BIN}" || return 1
   fi
   BIN_SWITCHED=0
 }
 rollback_ui_plist() {
   (( UI_PLIST_SWITCHED == 1 )) || return 0
-  /bin/launchctl bootout "gui/${UID}/pl.o2.mail-guardian-ui" >/dev/null 2>&1 || true
-  if (( HAD_UI_PLIST == 1 )) && [[ -f "${UI_PLIST_ROLLBACK}" ]]; then
-    /bin/mv -f "${UI_PLIST_ROLLBACK}" "${UI_SERVICE_PLIST}"
-    /bin/launchctl bootstrap "gui/${UID}" "${UI_SERVICE_PLIST}" >/dev/null 2>&1 || true
+  install_external launchctl bootout "gui/${UID}/pl.o2.mail-guardian-ui" >/dev/null 2>&1 || true
+  if (( HAD_UI_PLIST == 1 )); then
+    [[ -f "${UI_PLIST_ROLLBACK}" ]] || return 1
+    /bin/mv -f "${UI_PLIST_ROLLBACK}" "${UI_SERVICE_PLIST}" || return 1
+    UI_SUSPENDED=1
   else
-    /bin/rm -f -- "${UI_SERVICE_PLIST}"
+    /bin/rm -f -- "${UI_SERVICE_PLIST}" || return 1
+    UI_SUSPENDED=0
   fi
   UI_PLIST_SWITCHED=0
 }
 resume_scanner_if_needed() {
-  if (( SERVICE_SUSPENDED == 1 )) && [[ -f "${SERVICE_PLIST}" ]]; then
-    /bin/launchctl bootstrap "gui/${UID}" "${SERVICE_PLIST}" >/dev/null 2>&1 || true
+  if (( SERVICE_SUSPENDED == 1 )); then
+    [[ -f "${SERVICE_PLIST}" ]] || return 1
+    install_external launchctl bootstrap "gui/${UID}" "${SERVICE_PLIST}" >/dev/null 2>&1 || return 1
     SERVICE_SUSPENDED=0
   fi
 }
+resume_ui_if_needed() {
+  if (( UI_SUSPENDED == 1 )); then
+    [[ -f "$UI_SERVICE_PLIST" ]] || return 1
+    install_external launchctl bootstrap "gui/${UID}" "$UI_SERVICE_PLIST" >/dev/null 2>&1 || return 1
+    UI_SUSPENDED=0
+  fi
+}
 rollback_all() {
-  rollback_ui_plist
-  rollback_application
-  rollback_binary
-  rollback_deploy
-  resume_scanner_if_needed
+  local failed=0
+  rollback_ui_plist || failed=1
+  rollback_application || failed=1
+  rollback_binary || failed=1
+  rollback_deploy || failed=1
+  # Do not start services against a partially recovered installation.
+  if (( failed == 0 )); then
+    resume_scanner_if_needed || failed=1
+    resume_ui_if_needed || failed=1
+  fi
+  if (( failed )); then ROLLBACK_FAILED=1; return 1; fi
 }
 fail() {
   if (( FAIL_IN_PROGRESS == 0 )); then
     FAIL_IN_PROGRESS=1
     set +e
-    rollback_all
+    rollback_all || ROLLBACK_FAILED=1
   fi
+  if (( ROLLBACK_FAILED )); then
+    red "Nie udało się w pełni przywrócić poprzedniej instalacji. Zachowano kopie aktualizacyjne; potrzebna jest pomoc techniczna."
+    if [[ -n "${GUARDIAN_INSTALL_STATUS_FILE:-}" ]]; then
+      printf '%s\n' "Przywracanie poprzedniej instalacji nie powiodło się w pełni. Nie usuwaj kopii aktualizacyjnych; przekaż log osobie pomagającej." > "${GUARDIAN_INSTALL_STATUS_FILE}"
+    fi
+  fi
+  write_install_result failed
   red "Instalacja została zatrzymana."
   red "${1:-Nieznany błąd.}"
   red "Nie usunięto ani nie przeniesiono żadnej wiadomości."
-  if [[ -n "${GUARDIAN_INSTALL_STATUS_FILE:-}" ]]; then
+  if [[ -n "${GUARDIAN_INSTALL_STATUS_FILE:-}" && "$ROLLBACK_FAILED" == 0 ]]; then
     (umask 077; printf '%s\n' "${1:-Nieznany błąd.}" > "${GUARDIAN_INSTALL_STATUS_FILE}") || true
   fi
   pause_at_end
@@ -201,13 +240,18 @@ on_signal() {
   # Terminal może zostać zamknięty albo użytkownik może nacisnąć Ctrl+C w
   # najgorszym możliwym momencie — po odsunięciu starej wersji. Wyłączamy
   # kolejne sygnały na czas rollbacku i przywracamy pełny poprzedni komplet.
-  trap - HUP INT TERM
+  trap '' HUP INT TERM
   set +e
-  fail "Instalacja została przerwana. Poprzednia działająca wersja została przywrócona."
+  fail "Instalacja została przerwana. Sprawdź wynik przywracania w logu."
+}
+write_install_result() {
+  if [[ -n "${GUARDIAN_INSTALL_RESULT_FILE:-}" ]]; then
+    (umask 077; printf '%s\n' "$1" > "${GUARDIAN_INSTALL_RESULT_FILE}")
+  fi
 }
 trap 'on_error "${LINENO}"' ERR
 trap on_signal HUP INT TERM
-trap cleanup_temporary_files EXIT
+trap 'cleanup_temporary_files; install_lock_release' EXIT
 
 if [[ "${GUARDIAN_INSTALL_SELF_TEST:-0}" == "1" ]]; then
   case "${HOME}" in
@@ -277,6 +321,12 @@ if [[ "${GUARDIAN_INSTALL_SELF_TEST:-0}" == "1" ]]; then
     exit 98
   fi
 
+  if [[ "${GUARDIAN_INSTALL_ROLLBACK_FAILURE_TEST:-0}" == 1 ]]; then
+    selftest_prepare_binary
+    /bin/mv "$BIN_ROLLBACK" "$BIN_ROLLBACK.saved"
+    fail "Wymuszona awaria przywracania."
+  fi
+
   for checkpoint in after-deploy after-backend after-app after-ui-plist; do
     selftest_prepare_deploy
     if [[ "${checkpoint}" != "after-deploy" ]]; then selftest_prepare_binary; fi
@@ -311,11 +361,6 @@ printf '%s\n\n' "─────────────────────
   exit 1
 }
 
-if ! /usr/bin/xcrun --find swift >/dev/null 2>&1; then
-  /usr/bin/xcode-select --install >/dev/null 2>&1 || true
-  fail "macOS otworzył instalację bezpłatnych narzędzi Apple. Dokończ ją, a potem ponownie kliknij Install.command."
-fi
-
 MACOS_MAJOR="$(/usr/bin/sw_vers -productVersion | /usr/bin/awk -F. '{print $1}')"
 [[ "${MACOS_MAJOR}" =~ ^[0-9]+$ ]] && (( MACOS_MAJOR >= 13 )) \
   || fail "O2 Mail Guardian wymaga macOS 13 lub nowszego."
@@ -328,6 +373,17 @@ FREE_KIB="$(/bin/df -Pk "${HOME}" | /usr/bin/awk 'NR==2 {print $4}')"
   || fail "potrzebne są co najmniej 2 GB pamięci RAM."
 [[ "${FREE_KIB}" =~ ^[0-9]+$ ]] && (( FREE_KIB >= 20*1024*1024 )) \
   || fail "potrzebne jest co najmniej 20 GB wolnego miejsca na dysku."
+
+if [[ "$DISTRIBUTION" == prebuilt ]]; then
+  [[ "$(uname -m)" == arm64 ]] || fail "Ta paczka wymaga Maca Apple Silicon."
+  verify_release "$PROJECT_DIR" "$GUARDIAN_VERSION" || fail "Paczka jest niekompletna lub uszkodzona. Pobierz ponownie cały ZIP."
+  verify_prebuilt "$PROJECT_DIR" "$GUARDIAN_VERSION" || fail "Gotowe programy nie przeszły samokontroli. Pobierz ponownie paczkę."
+else
+  if ! /usr/bin/xcrun --find swift >/dev/null 2>&1; then
+    /usr/bin/xcode-select --install >/dev/null 2>&1 || true
+    fail "Dokończ instalację narzędzi Apple i uruchom Install.command ponownie."
+  fi
+fi
 
 blue "Sprawdzam, czy ten Mac jest gotowy."
 printf '  ✓ macOS %s\n  ✓ architektura %s\n  ✓ CPU: %s rdzeni, pamięć: %s GB\n  ✓ wolne miejsce: %s GB\n' \
@@ -350,7 +406,7 @@ fi
 export GUARDIAN_SKIP_PAUSE=1
 export GUARDIAN_NONINTERACTIVE=1
 blue "Przygotowuję brakujące składniki."
-/bin/bash "${PROJECT_DIR}/scripts/01-zainstaluj-wymagania.command"
+install_external dependencies
 
 if [[ -x /opt/homebrew/bin/brew ]]; then
   PATH="/opt/homebrew/bin:/opt/homebrew/sbin:${PATH}"
@@ -360,6 +416,23 @@ fi
 export PATH
 export GOTOOLCHAIN=auto
 
+if [[ "$DISTRIBUTION" == prebuilt ]]; then
+  blue "Sprawdzam nową wersję przed instalacją…"
+  mkdir -p "$INSTALL_DIR" "$APP_PARENT"
+  chmod 700 "$INSTALL_DIR"
+  BUILD_TMP="$(/usr/bin/mktemp "$INSTALL_DIR/.guardian-build.XXXXXX")"
+  cp "$PROJECT_DIR/prebuilt/guardian" "$BUILD_TMP"
+  chmod 755 "$BUILD_TMP"
+  blue "Przygotowuję okno aplikacji…"
+  APP_STAGE_ROOT="$(/usr/bin/mktemp -d "$APP_PARENT/.o2-guardian-app-stage.XXXXXX")"
+  APP_STAGE="$APP_STAGE_ROOT/O2 Mail Guardian.app"
+  /usr/bin/ditto "$PROJECT_DIR/prebuilt/O2 Mail Guardian.app" "$APP_STAGE"
+  /usr/bin/codesign --verify --strict "$BUILD_TMP"
+  /usr/bin/codesign --verify --deep --strict "$APP_STAGE"
+  "$BUILD_TMP" version | /usr/bin/grep -F "O2 Mail Guardian $GUARDIAN_VERSION ("
+  "$BUILD_TMP" self-test
+  "$APP_STAGE/Contents/MacOS/O2MailGuardianApp" --self-test
+else
 if ! command -v go >/dev/null 2>&1; then
   blue "Instaluję brakujące narzędzie programu…"
   if ! brew install go; then
@@ -409,12 +482,14 @@ mkdir -p "${APP_STAGE}/Contents/MacOS" "${APP_STAGE}/Contents/Resources"
 /usr/bin/codesign --force --deep --sign - "${APP_STAGE}"
 /usr/bin/codesign --verify --deep --strict "${APP_STAGE}"
 
+fi
+
 EXISTING_CONFIG=0
 if [[ -e "${CONFIG_FILE}" ]]; then
   if [[ ! -f "${CONFIG_FILE}" ]]; then
     fail "ścieżka konfiguracji istnieje, ale nie jest zwykłym plikiem: ${CONFIG_FILE}"
   fi
-  if "${BUILD_TMP}" --config "${CONFIG_FILE}" mode status >/dev/null 2>&1; then
+  if install_external backend "${BUILD_TMP}" --config "${CONFIG_FILE}" mode status >/dev/null 2>&1; then
     EXISTING_CONFIG=1
   else
     fail "istniejąca konfiguracja jest nieczytelna. Poprzednia instalacja pozostała bez zmian; najpierw odzyskaj config.toml z kopii."
@@ -425,11 +500,12 @@ SERVICE_WAS_INSTALLED=0
 [[ -d "${APP_DIR}" ]] && HAD_APP=1
 [[ -f "${UI_SERVICE_PLIST}" ]] && HAD_UI_PLIST=1
 if (( HAD_UI_PLIST == 1 )); then
-  /bin/launchctl bootout "gui/${UID}/pl.o2.mail-guardian-ui" >/dev/null 2>&1 || true
+  UI_SUSPENDED=1
+  install_external launchctl bootout "gui/${UID}/pl.o2.mail-guardian-ui" >/dev/null 2>&1 || true
 fi
 if (( SERVICE_WAS_INSTALLED == 1 )); then
   blue "Na chwilę wstrzymuję sprawdzanie poczty podczas aktualizacji…"
-  /bin/launchctl bootout "gui/${UID}/pl.o2.mail-guardian" >/dev/null 2>&1 || true
+  install_external launchctl bootout "gui/${UID}/pl.o2.mail-guardian" >/dev/null 2>&1 || true
   SERVICE_SUSPENDED=1
 fi
 
@@ -441,7 +517,7 @@ DEPLOY_STAGE="$(/usr/bin/mktemp -d "${RUNTIME_DIR}/.deploy-stage.XXXXXX")"
 [[ -f "${DEPLOY_STAGE}/compose.yaml" ]] \
   || fail "paczka nie zawiera deploy/compose.yaml."
 GUARDIAN_RUNTIME_DIR="${RUNTIME_DIR}" \
-  docker compose \
+  install_external compose compose \
     --project-name o2-mail-guardian \
     --file "${DEPLOY_STAGE}/compose.yaml" \
     config --quiet \
@@ -463,9 +539,8 @@ DEPLOY_STAGE=""
 DEPLOY_SWITCHED=1
 inject_failure "after-deploy"
 
-if ! /bin/bash "${PROJECT_DIR}/scripts/02-uruchom-silnik.command"; then
-  rollback_deploy
-  fail "nowy silnik nie przeszedł kontroli; przywrócono poprzednią konfigurację."
+if ! install_external start-stack; then
+  fail "nowy silnik nie przeszedł kontroli; sprawdź wynik przywracania w logu."
 fi
 
 blue "Włączam sprawdzoną nową wersję…"
@@ -485,6 +560,7 @@ if (( HAD_APP == 1 )); then
   APP_BACKUP_ROOT="$(/usr/bin/mktemp -d "${APP_PARENT}/.o2-guardian-app-backup.XXXXXX")"
   APP_BACKUP="${APP_BACKUP_ROOT}/O2 Mail Guardian.app"
   /bin/mv "${APP_DIR}" "${APP_BACKUP}"
+  APP_SWITCHED=1
 elif [[ -e "${APP_DIR}" ]]; then
   fail "${APP_DIR} istnieje, ale nie jest aplikacją-katalogiem; niczego nie nadpisano."
 fi
@@ -501,8 +577,10 @@ if (( HAD_APP == 0 || HAD_UI_PLIST == 1 )); then
     /bin/cp -p "${UI_SERVICE_PLIST}" "${UI_PLIST_ROLLBACK}"
   fi
   UI_PLIST_SWITCHED=1
-  "${GUARDIAN_BIN}" app-service install
+  install_external backend "${GUARDIAN_BIN}" app-service install
+  UI_SUSPENDED=0
 fi
+inject_failure "after-ui-plist"
 
 # Komenda działa od razu w nowych oknach Terminala, bez edycji ręcznej.
 PROFILE="${HOME}/.zprofile"
@@ -512,21 +590,23 @@ if [[ ! -f "${PROFILE}" ]] || ! grep -Fqx "${PATH_LINE}" "${PROFILE}"; then
 fi
 export PATH="${INSTALL_DIR}:${PATH}"
 
-green "Wszystkie składniki programu działają."
+green "Pliki programu zostały zainstalowane."
 printf '\n'
 if (( EXISTING_CONFIG == 0 )); then
   blue "To pierwsza instalacja — kreator konta otworzy się w aplikacji."
 else
   green "Zachowano Twoje ustawienia i dotychczasowe dane ochrony."
   blue "Wykonuję kontrolę po aktualizacji bez ponownego pytania o hasło…"
-  if ! "${GUARDIAN_BIN}" doctor; then
+  if ! install_external backend "${GUARDIAN_BIN}" doctor; then
+    INSTALL_RESULT=attention
     yellow "Aktualizacja programu zakończyła się, ale kontrola wykryła problem operacyjny."
     yellow "Otwórz aplikację O2 Mail Guardian i wybierz „Sprawdź i napraw”. Nie zmieniono zapisanego hasła."
   else
     green "Kontrola po aktualizacji zakończyła się pomyślnie."
   fi
   if (( SERVICE_WAS_INSTALLED == 1 )); then
-    if ! "${GUARDIAN_BIN}" service install; then
+    if ! install_external backend "${GUARDIAN_BIN}" service install; then
+      INSTALL_RESULT=attention
       yellow "Nie udało się wznowić sprawdzania w tle. W aplikacji wybierz „Sprawdź i napraw”."
     else
       SERVICE_SUSPENDED=0
@@ -557,7 +637,7 @@ APP_STAGE_ROOT=""
 safe_remove_temp "${UI_PLIST_ROLLBACK}"
 UI_PLIST_ROLLBACK=""
 UI_PLIST_SWITCHED=0
-resume_scanner_if_needed
+resume_scanner_if_needed || INSTALL_RESULT=attention
 
 printf '\n'
 green "Instalacja O2 Mail Guardian ${GUARDIAN_VERSION} zakończona."
@@ -565,8 +645,10 @@ printf '%s\n' \
   "Aplikacja jest w folderze ~/Applications." \
   "Awaryjnie nadal możesz użyć Guardian.command lub polecenia guardian menu."
 
-if ! /usr/bin/open "${APP_DIR}"; then
-  /usr/bin/open -R "${APP_DIR}" >/dev/null 2>&1 || true
+if ! install_external open "${APP_DIR}"; then
+  install_external open -R "${APP_DIR}" >/dev/null 2>&1 || true
+  INSTALL_RESULT=attention
   yellow "Instalacja jest gotowa, ale aplikacja nie otworzyła się automatycznie. Finder wskazał ją — kliknij dwukrotnie."
 fi
+write_install_result "$INSTALL_RESULT"
 pause_at_end

@@ -116,6 +116,8 @@ func (a *application) execute(args []string) error {
 	case "version", "wersja", "--version":
 		fmt.Fprintf(a.out, "O2 Mail Guardian %s (%s)\n", version, commit)
 		return nil
+	case "self-test":
+		return a.selfTest()
 	case "setup", "konfiguruj":
 		return a.setup()
 	case "menu":

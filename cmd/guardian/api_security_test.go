@@ -528,3 +528,15 @@ func TestBayesRollbackPreservesHighWaterAndDisablesUnsafeModes(t *testing.T) {
 		t.Fatalf("high-water or observation reset is wrong: spam=%q ham=%q active=%q", spamHigh, hamHigh, activeSince)
 	}
 }
+
+func TestArchiveDateRangeValidation(t *testing.T) {
+	for _, pair := range [][2]string{{"bad", "2026-09-02T00:00:00Z"}, {"2026-09-01T00:00:00Z", "bad"}, {"2026-09-02T00:00:00Z", "2026-09-01T00:00:00Z"}, {"2026-09-01T00:00:00Z", "2026-09-01T00:00:00Z"}} {
+		if _, _, err := archiveDateRange(pair[0], pair[1]); err == nil {
+			t.Fatalf("accepted invalid range: %v", pair)
+		}
+	}
+	start, end, err := archiveDateRange("2026-10-25T00:00:00+02:00", "2026-10-26T00:00:00+01:00")
+	if err != nil || end.Sub(start) != 25*time.Hour {
+		t.Fatalf("timezone boundary lost: %v %v %v", start, end, err)
+	}
+}

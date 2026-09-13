@@ -76,7 +76,7 @@ case "${command}" in
       failure RSPAMD_UNAVAILABLE "Lokalny silnik nie odpowiada." "Sprawdź i napraw lokalną ochronę."
     fi
     if [[ "${configured}" != "true" ]]; then
-      success '{"configured":false,"health":"unconfigured","health_label":"Wymaga konfiguracji","recommendation":"Dokończ pierwszą konfigurację.","automation":"off","mode":"protect","purge_enabled":false,"summary":{},"trained_spam":0,"trained_ham":0,"required_spam":200,"required_ham":200,"first_dry_run":false,"app_autostart":false,"version":"0.3.0-test"}'
+      success '{"configured":false,"health":"unconfigured","health_label":"Wymaga konfiguracji","recommendation":"Dokończ pierwszą konfigurację.","automation":"off","mode":"protect","purge_enabled":false,"summary":{},"trained_spam":0,"trained_ham":0,"required_spam":200,"required_ham":200,"first_dry_run":false,"app_autostart":false,"version":"0.4.0-test"}'
       exit 0
     fi
     health="healthy"
@@ -100,7 +100,8 @@ case "${command}" in
     current_date="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     pending=0
     if [[ "${scenario}" == "attention" ]]; then pending=1; fi
-    success "{\"protection\":{\"required_days\":14,\"remaining_days\":${remaining},\"period_complete\":${ready},\"quality_ready\":${quality},\"ready\":${ready},\"message\":\"${progress_message}\"},\"configured\":true,\"health\":\"${health}\",\"health_label\":\"${health_label}\",\"recommendation\":\"${recommendation}\",\"automation\":\"${automation}\",\"mode\":\"${mode}\",\"purge_enabled\":${purge},\"last_attempt\":\"${current_date}\",\"last_success\":\"${current_date}\",\"stage\":\"complete\",\"summary\":{\"runs\":6,\"scanned\":84,\"kept\":71,\"rescued\":2,\"quarantined\":8,\"review\":3,\"errors\":0,\"waiting_quarantine\":18,\"waiting_review\":4,\"pending_moves\":${pending}},\"trained_spam\":143,\"trained_ham\":126,\"required_spam\":200,\"required_ham\":200,\"first_dry_run\":${first_dry_run},\"app_autostart\":${app_autostart},\"version\":\"0.3.0-test\"}"
+    quality_checks='[{"id":"sample","title":"Potwierdzony spam","detail":"Wiadomości oznaczone przez Ciebie jako spam w tym okresie: 10. Potrzebna jest co najmniej jedna.","passed":true},{"id":"accuracy","title":"Trafne rozpoznanie spamu","detail":"Wymagane co najmniej 90% zgodności wcześniejszych decyzji z Twoimi potwierdzeniami.","passed":'"${quality}"'},{"id":"important","title":"Ważne wiadomości bez błędnego oznaczenia jako spam","detail":"Potwierdzone przez Ciebie pomyłki: 0. Wymagane zero w tym okresie obserwacji.","passed":true},{"id":"rescues","title":"Spam bez błędnego uznania za ważną wiadomość","detail":"Potwierdzone przez Ciebie pomyłki: 0. Wymagane zero w tym okresie obserwacji.","passed":true},{"id":"history","title":"Znana wcześniejsza decyzja","detail":"Potwierdzony spam bez wcześniejszej decyzji: 0. Wymagane zero.","passed":true}]'
+    success "{\"protection\":{\"quality_checks\":${quality_checks},\"required_days\":14,\"remaining_days\":${remaining},\"period_complete\":${ready},\"quality_ready\":${quality},\"ready\":${ready},\"message\":\"${progress_message}\"},\"configured\":true,\"health\":\"${health}\",\"health_label\":\"${health_label}\",\"recommendation\":\"${recommendation}\",\"automation\":\"${automation}\",\"mode\":\"${mode}\",\"purge_enabled\":${purge},\"last_attempt\":\"${current_date}\",\"last_success\":\"${current_date}\",\"stage\":\"complete\",\"summary\":{\"runs\":6,\"scanned\":84,\"kept\":71,\"rescued\":2,\"quarantined\":8,\"review\":3,\"errors\":0,\"waiting_quarantine\":18,\"waiting_review\":4,\"pending_moves\":${pending}},\"trained_spam\":143,\"trained_ham\":126,\"required_spam\":200,\"required_ham\":200,\"first_dry_run\":${first_dry_run},\"app_autostart\":${app_autostart},\"version\":\"0.4.0-test\"}"
     ;;
   run)
     if [[ "${1:-}" == "dry-run" && "${configured}" == "true" ]]; then
@@ -130,8 +131,31 @@ case "${command}" in
   archive)
     case "${1:-}" in
       list)
+        if [[ "${scenario}" == "archive-error" ]]; then
+          failure ARCHIVE "Nie udało się odczytać kopii." "Spróbuj ponownie."
+          exit 0
+        fi
         page="${2:-1}"
         category="${3:-all}"
+        if [[ $# -eq 5 ]]; then
+          matches=""
+          if [[ "${scenario}" != "empty" ]]; then
+            while IFS='|' read -r copy_id copy_date copy_status copy_verdict; do
+              [[ "${category}" == "all" || "${category}" == "${copy_status}" ]] || continue
+              [[ "${copy_date}" < "$4" || ! "${copy_date}" < "$5" ]] && continue
+              [[ -z "${matches}" ]] || matches+=","
+              matches+="{\"id\":${copy_id},\"date\":\"${copy_date}\",\"verdict\":\"${copy_verdict}\",\"status\":\"${copy_status}\"}"
+            done <<'COPIES'
+104|2026-08-21T18:42:00Z|quarantined|spam
+103|2026-08-20T09:15:00Z|quarantined|spam
+102|2026-08-19T13:07:00Z|review|uncertain
+101|2026-08-18T07:21:00Z|quarantined|spam
+COPIES
+          fi
+          [[ "${page}" == "1" ]] || matches=""
+          success "{\"page\":${page},\"items\":[${matches}],\"has_next\":false}"
+          exit 0
+        fi
         if [[ "${scenario}" == "empty" || "${category}" == "restored" ]]; then
           success '{"page":1,"items":[],"has_next":false}'
           exit 0

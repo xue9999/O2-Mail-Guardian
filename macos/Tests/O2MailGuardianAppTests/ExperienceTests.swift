@@ -1,7 +1,78 @@
+import Darwin
 import Testing
 @testable import O2MailGuardianApp
 
 extension ProtocolTests {
+    @MainActor
+    @Test func cancelledOperationCannotReportSuccessOrKeepTrustedReadiness() async {
+        let model = GuardianModel()
+        let completed = await model.perform {
+            throw APIErrorPayload(code: "CANCELLED", severity: "info", message: "Anulowano", recovery: nil)
+        }
+        #expect(!completed)
+        #expect(!model.busy)
+        #expect(model.failure == nil)
+        #expect(model.snapshotIsStale)
+        #expect(model.notice?.contains("Wcześniej zakończone kroki") == true)
+    }
+
+    @MainActor
+    @Test func skippedOperationCannotReportSuccess() async {
+        let model = GuardianModel()
+        model.busy = true
+        var invoked = false
+        let completed = await model.perform { invoked = true; return "Gotowe" }
+        #expect(!completed)
+        #expect(!invoked)
+        #expect(model.busy)
+        #expect(model.notice == nil)
+    }
+
+    @MainActor
+    @Test func operationRequiresSuccessfulStateRefreshBeforeContinuing() async {
+        let previous = getenv("GUARDIAN_MOCK_SCENARIO").map { String(cString: $0) }
+        defer {
+            if let previous { setenv("GUARDIAN_MOCK_SCENARIO", previous, 1) }
+            else { unsetenv("GUARDIAN_MOCK_SCENARIO") }
+        }
+        let model = GuardianModel()
+        setenv("GUARDIAN_MOCK_SCENARIO", "offline", 1)
+        let unconfirmed = await model.perform { "Zapisano ustawienie" }
+        #expect(!unconfirmed)
+        #expect(model.snapshotIsStale)
+        #expect(model.failure != nil)
+        setenv("GUARDIAN_MOCK_SCENARIO", "healthy", 1)
+        let confirmed = await model.perform { "Zapisano ustawienie" }
+        #expect(confirmed)
+        #expect(!model.snapshotIsStale)
+        #expect(model.failure == nil)
+        #expect(!model.busy)
+    }
+
+    @MainActor
+    @Test func archiveFailureClearsStaleRowsAndRetryKeepsRequestedPage() async {
+        let previous = getenv("GUARDIAN_MOCK_SCENARIO").map { String(cString: $0) }
+        defer {
+            if let previous { setenv("GUARDIAN_MOCK_SCENARIO", previous, 1) }
+            else { unsetenv("GUARDIAN_MOCK_SCENARIO") }
+        }
+        setenv("GUARDIAN_MOCK_SCENARIO", "healthy", 1)
+        let model = GuardianModel()
+        await model.loadArchive()
+        #expect(!model.archivePage.items.isEmpty)
+        setenv("GUARDIAN_MOCK_SCENARIO", "archive-error", 1)
+        await model.loadArchive(page: 2)
+        #expect(!model.archiveLoaded)
+        #expect(model.failure?.code == "ARCHIVE")
+        #expect(model.archivePage.items.isEmpty)
+        #expect(!model.archivePage.hasNext)
+        #expect(model.archivePage.page == 2)
+        setenv("GUARDIAN_MOCK_SCENARIO", "healthy", 1)
+        await model.loadArchive(page: model.archivePage.page)
+        #expect(model.archiveLoaded)
+        #expect(model.failure == nil)
+        #expect(model.archivePage.page == 2)
+    }
     @Test func healthyObserverNeverClaimsActiveSorting() {
         var snapshot = GuardianSnapshot()
         snapshot.configured = true
@@ -9,6 +80,7 @@ extension ProtocolTests {
         snapshot.automation = "on"
         snapshot.mode = "protect"
         #expect(ProtectionPresentation(snapshot).title == "Odebrane pod obserwacją")
+        #expect(ProtectionPresentation(snapshot).symbol == "eye.fill")
         snapshot.mode = "active"
         #expect(ProtectionPresentation(snapshot).title == "Porządkowanie jest włączone")
         snapshot.automation = "off"
@@ -24,6 +96,7 @@ extension ProtocolTests {
         #expect(ProtectionPresentation(snapshot).title == "Sprawdź ustawienia ochrony")
         snapshot.mode = "active"
         #expect(ProtectionPresentation(snapshot, stale: true).title == "Nie można potwierdzić stanu")
+        #expect(ProtectionPresentation(snapshot, stale: true).symbol == "questionmark.shield")
         snapshot.health = "critical"
         #expect(ProtectionPresentation(snapshot).title == "Ochrona wymaga naprawy")
         snapshot.health = "attention"
@@ -61,5 +134,19 @@ extension ProtocolTests {
         #expect(model.snapshot.protection == nil)
         #expect(model.lastScan == nil)
         #expect(!model.snapshot.firstDryRun)
+    }
+    @MainActor
+    @Test func archiveDateFilterReachesBackendWithCategory() async {
+        let model = GuardianModel()
+        model.archiveFilter = "quarantined"
+        model.archiveDateRange = ["2026-08-20T00:00:00Z", "2026-08-21T00:00:00Z"]
+        await model.loadArchive()
+        #expect(model.archiveLoaded)
+        #expect(model.archivePage.items.map(\.id) == [103])
+        #expect(!model.archivePage.hasNext)
+        model.archiveDateRange = ["2026-09-01T00:00:00Z", "2026-09-02T00:00:00Z"]
+        await model.loadArchive()
+        #expect(model.archiveLoaded)
+        #expect(model.archivePage.items.isEmpty)
     }
 }

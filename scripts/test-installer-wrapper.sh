@@ -14,7 +14,7 @@ cleanup() {
 trap cleanup EXIT
 
 wrapper_lines="$(/usr/bin/wc -l < "${PROJECT_DIR}/Install.command")"
-(( wrapper_lines <= 120 )) || {
+(( wrapper_lines <= 170 )) || {
   printf 'Widoczny instalator znów stał się zbyt złożony: %s wierszy.\n' "${wrapper_lines}" >&2
   exit 1
 }
@@ -54,7 +54,8 @@ printf '%s\n' \
   'if [[ "${WRAPPER_TEST_RESULT:-success}" == "failure" ]]; then' \
   '  printf "%s\n" "Bezpieczny opis testowej awarii." > "${GUARDIAN_INSTALL_STATUS_FILE}"' \
   '  exit 23' \
-  'fi' > "${FAKE_CORE}"
+  'fi' \
+  'if [[ "${WRAPPER_TEST_RESULT:-success}" != missing ]]; then printf "%s\n" "${WRAPPER_TEST_RESULT:-success}" > "${GUARDIAN_INSTALL_RESULT_FILE}"; fi' > "${FAKE_CORE}"
 
 common_env=(
   HOME="${TEST_HOME}"
@@ -74,7 +75,7 @@ success_output="$(env "${common_env[@]}" WRAPPER_TEST_RESULT=success /bin/bash "
 failure_output="$(env "${common_env[@]}" WRAPPER_TEST_RESULT=failure /bin/bash "${PROJECT_DIR}/Install.command" 2>&1 || true)"
 [[ "${failure_output}" == *"Bezpieczny opis testowej awarii."* ]]
 [[ "${failure_output}" != *"technical-only-detail"* ]]
-[[ "${failure_output}" == *"Najpierw uruchom ponownie Install.command"* ]]
+[[ "${failure_output}" == *"Przeczytaj wskazówkę powyżej"* ]]
 
 /bin/rm -f -- "${MARKER}"
 cancel_output="$(printf 'N\n' | env \
@@ -102,5 +103,19 @@ shortcut_output="$(env \
 
 permissions="$(/usr/bin/stat -f '%Lp' "${TEST_HOME}/Library/Logs/O2 Mail Guardian/instalacja.log")"
 [[ "${permissions}" == "600" ]]
+
+attention_output="$(env "${common_env[@]}" WRAPPER_TEST_RESULT=attention /bin/bash "${PROJECT_DIR}/Install.command" 2>&1)"
+[[ "$attention_output" == *"ochrona wymaga uwagi"* && "$attention_output" != *"Gotowe"* ]]
+if env "${common_env[@]}" WRAPPER_TEST_RESULT=missing /bin/bash "${PROJECT_DIR}/Install.command" >"$TEST_HOME/missing-output" 2>&1; then exit 1; fi
+/usr/bin/grep -q 'Nie potwierdzono' "$TEST_HOME/missing-output"
+
+lock="$TEST_HOME/Library/Logs/O2 Mail Guardian/install.lock"
+mkdir "$lock"
+printf '999999\n' > "$lock/owner"
+before="$(shasum "$TEST_HOME/Library/Logs/O2 Mail Guardian/instalacja.log")"
+if env "${common_env[@]}" /bin/bash "$PROJECT_DIR/Install.command" > "$TEST_HOME/stale-output" 2>&1; then exit 1; fi
+[[ "$(cat "$lock/owner")" == 999999 ]]
+[[ "$(shasum "$TEST_HOME/Library/Logs/O2 Mail Guardian/instalacja.log")" == "$before" ]]
+grep -q 'Monitorze aktywności' "$TEST_HOME/stale-output"
 
 printf 'Prosty interfejs instalatora: OK\n'

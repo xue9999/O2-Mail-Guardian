@@ -38,14 +38,14 @@ po kroku znajduje się w
 
 Jeżeli nie jesteś programistą, zacznij właśnie tutaj — nie trzeba wcześniej
 otwierać Terminala ani wpisywać poleceń. Jeżeli otrzymałeś plik
-**`O2-Mail-Guardian-0.3.0.zip`**, rozpakuj go i otwórz powstały folder. Są w
+**`O2-Mail-Guardian-0.5.0-macos-arm64.zip`**, rozpakuj go i otwórz powstały folder. Są w
 nim tylko instrukcja, licencja i instalator; techniczne składniki są celowo
 ukryte. W Finderze kliknij dwukrotnie **`Install.command`**. Instalator:
 
 - sprawdzi wymagania;
 - zainstaluje potrzebne lokalne składniki;
 - uruchomi bezpieczny stos Rspamd;
-- zbuduje i lokalnie podpisze natywną aplikację;
+- sprawdzi sumy plików, podpisy i samokontrolę gotowych programów;
 - zainstaluje ją jako `~/Applications/O2 Mail Guardian.app`;
 - otworzy graficzny kreator konfiguracji.
 
@@ -62,9 +62,24 @@ globalnie zabezpieczeń macOS.
 Ten sam `Install.command` służy do bezpiecznej aktualizacji. Jeśli działająca
 konfiguracja już istnieje, instalator zachowuje konto, hasło w pęku kluczy,
 bazę, archiwum i ustawienie automatycznej usługi. Nie uruchamia ponownie
-kreatora hasła. Najpierw buduje i testuje wersję 0.3.0, a backend, aplikację
-i konfigurację silnika podmienia dopiero po walidacji. Awaria w którymkolwiek
-punkcie przywraca poprzedni komplet.
+kreatora hasła. Najpierw weryfikuje gotowe programy wersji 0.5.0, a backend,
+aplikację i konfigurację silnika podmienia dopiero po walidacji. Po awarii
+podejmuje przywracanie poprzedniego kompletu. Jeśli przywracanie się nie uda,
+zachowuje kopie i prosi o pomoc zamiast potwierdzać sukces.
+
+Paczka jest przeznaczona dla **Apple Silicon i macOS 13 lub nowszego**.
+Nie kompiluje Guardiana i nie instaluje Go. Homebrew oraz lokalny silnik
+mogą nadal wymagać narzędzi Apple i dostępu do internetu. Instalacja ze źródeł
+w repozytorium zachowuje budowanie Go/Swift.
+
+Programy mają lokalny podpis ad hoc, bez Developer ID i notaryzacji Apple.
+Nie wyłączaj zabezpieczeń systemu ani nie usuwaj automatycznie kwarantanny.
+Obok ZIP-a znajduje się plik `.sha256` do sprawdzenia pobrania; sumy kontrolne
+wykrywają uszkodzenie plików, ale nie potwierdzają tożsamości wydawcy.
+
+Wynik „Program zainstalowany — ochrona wymaga uwagi” oznacza, że pliki są
+zainstalowane, lecz kontrola, wznowienie harmonogramu lub otwarcie aplikacji
+wymaga sprawdzenia. Nie oznacza aktywnej ochrony skrzynki.
 
 ### 3. Przejdź przez kreator
 
@@ -187,6 +202,9 @@ licznik nie spada, pozostawi przypadek zablokowany bez kasowania — postępuj
 według instrukcji rozwiązywania problemów.
 
 ## Dokumentacja
+
+- [Zmiany w wersji 0.5.0](CHANGELOG.md)
+- [Kryteria audytu CX i dostępności](docs/AUDYT-CX.md)
 
 - [Instalacja krok po kroku](docs/INSTALACJA.md)
 - [Graficzny panel i pierwsze kroki](docs/GUI-I-PIERWSZE-KROKI.md)

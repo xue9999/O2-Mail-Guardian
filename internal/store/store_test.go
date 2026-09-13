@@ -711,3 +711,42 @@ func TestArchiveFilterRunsBeforePaginationAndStaysWithinAccount(t *testing.T) {
 		}
 	}
 }
+
+func TestArchiveDateRangeBeforePagination(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 20; i++ {
+		account, status := "mine@o2.pl", "review"
+		if i == 7 {
+			account = "other@o2.pl"
+		}
+		if i == 8 {
+			status = "quarantined"
+		}
+		_, err := db.UpsertMessage(ctx, &Message{Account: account, SourceFolder: "INBOX", CurrentFolder: "archive", UIDValidity: 1, UID: uint32(i + 1), RawSHA256: fmt.Sprintf("date-%d", i), Verdict: "spam", Status: status, FirstSeen: start.Add(time.Duration(i) * time.Hour), LastScanned: start, ArchivePath: fmt.Sprintf("copy-%d.age", i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	from, until := start.Add(5*time.Hour), start.Add(10*time.Hour)
+	first, err := db.ArchivedPageInRange(ctx, "mine@o2.pl", 2, 0, "review", from, until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.ArchivedPageInRange(ctx, "mine@o2.pl", 2, 2, "review", from, until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 2 || len(second) != 1 || first[0].UID != 10 || first[1].UID != 7 || second[0].UID != 6 {
+		t.Fatalf("unexpected filtered pages: %+v / %+v", first, second)
+	}
+	empty, err := db.ArchivedPageInRange(ctx, "mine@o2.pl", 10, 0, "", start.AddDate(0, 0, 1), start.AddDate(0, 0, 2))
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("expected empty range: %+v %v", empty, err)
+	}
+}

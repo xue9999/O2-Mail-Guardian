@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/o2-mail-guardian/guardian/internal/config"
@@ -10,13 +11,21 @@ import (
 
 // Read-only presentation of the existing activation rules. modeCommand and
 // the engine remain authoritative and recheck every rule before moving mail.
+type apiQualityCheck struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Detail string `json:"detail"`
+	Passed bool   `json:"passed"`
+}
+
 type apiProtection struct {
-	RequiredDays   int    `json:"required_days"`
-	RemainingDays  int    `json:"remaining_days"`
-	PeriodComplete bool   `json:"period_complete"`
-	QualityReady   bool   `json:"quality_ready"`
-	Ready          bool   `json:"ready"`
-	Message        string `json:"message"`
+	RequiredDays   int               `json:"required_days"`
+	RemainingDays  int               `json:"remaining_days"`
+	PeriodComplete bool              `json:"period_complete"`
+	QualityReady   bool              `json:"quality_ready"`
+	Ready          bool              `json:"ready"`
+	Message        string            `json:"message"`
+	QualityChecks  []apiQualityCheck `json:"quality_checks,omitempty"`
 }
 
 func protectionProgress(cfg config.Config, db *store.DB, now time.Time) *apiProtection {
@@ -49,13 +58,14 @@ func protectionProgress(cfg config.Config, db *store.DB, now time.Time) *apiProt
 	if err != nil {
 		return p
 	}
+	p.QualityChecks = qualityChecks(quality)
 	p.QualityReady = quality.Ready()
 	p.Ready = p.PeriodComplete && p.QualityReady
 	switch {
 	case p.Ready:
 		p.Message = "Warunki spełnione. Możesz włączyć przenoszenie spamu z Odebranych do kwarantanny."
 	case quality.SpamFeedback == 0:
-		p.Message = "Oznacz pomyłki w folderach nauki, aby Guardian mógł sprawdzić trafność swoich decyzji."
+		p.Message = "Potrzebne jest Twoje potwierdzenie spamu. Przenieś rozpoznany spam do AI-Naucz-spam i przetwórz korekty. Nie oznaczaj prawidłowych wiadomości tylko po to, by zakończyć obserwację."
 	case !p.QualityReady:
 		p.Message = "Korekty wskazują, że filtr wymaga dalszej nauki. Przenoszenie z Odebranych pozostaje wyłączone."
 	default:
@@ -76,4 +86,14 @@ func apiRunResult(run *store.Run, err error) map[string]any {
 		}
 	}
 	return result
+}
+
+func qualityChecks(q store.ActivationQuality) []apiQualityCheck {
+	return []apiQualityCheck{
+		{"sample", "Potwierdzony spam", fmt.Sprintf("Wiadomości oznaczone przez Ciebie jako spam w tym okresie: %d. Potrzebna jest co najmniej jedna.", q.SpamFeedback), q.SpamFeedback > 0},
+		{"accuracy", "Trafne rozpoznanie spamu", fmt.Sprintf("Guardian wcześniej rozpoznał jako spam %d z %d potwierdzonych wiadomości. Wymagane co najmniej 90%%.", q.SpamPreviouslySpam, q.SpamFeedback), q.SpamFeedback > 0 && q.SpamPreviouslySpam*100 >= q.SpamFeedback*90},
+		{"important", "Ważne wiadomości bez błędnego oznaczenia jako spam", fmt.Sprintf("Potwierdzone przez Ciebie pomyłki: %d. Wymagane zero w tym okresie obserwacji.", q.FalsePositives), q.FalsePositives == 0},
+		{"rescues", "Spam bez błędnego uznania za ważną wiadomość", fmt.Sprintf("Potwierdzone przez Ciebie pomyłki: %d. Wymagane zero w tym okresie obserwacji.", q.FalseRescues), q.FalseRescues == 0},
+		{"history", "Znana wcześniejsza decyzja", fmt.Sprintf("Potwierdzony spam bez wcześniejszej decyzji „spam” lub „do sprawdzenia”: %d. Wymagane zero.", q.SpamUnexplained), q.SpamUnexplained == 0},
+	}
 }

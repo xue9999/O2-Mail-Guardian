@@ -5,7 +5,7 @@ programowaniem. Większość instalacji odbywa się w kreatorze.
 
 ## Czego potrzebujesz
 
-- Maca z aktualnym systemem macOS;
+- Maca Apple Silicon z macOS 13 lub nowszym dla paczki binarnej;
 - połączenia z internetem;
 - działającego konta o2.pl;
 - prawa do instalowania programów na swoim Macu;
@@ -66,8 +66,8 @@ Instrukcja dostawcy:
 
 ## Krok 5: uruchom `Install.command`
 
-1. Jeżeli pobrałeś `O2-Mail-Guardian-0.3.0.zip`, kliknij go dwukrotnie, a
-   następnie otwórz rozpakowany folder **O2 Mail Guardian 0.3.0**. Zobaczysz
+1. Jeżeli pobrałeś `O2-Mail-Guardian-0.5.0-macos-arm64.zip`, kliknij go dwukrotnie, a
+   następnie otwórz rozpakowany folder **O2 Mail Guardian 0.5.0**. Zobaczysz
    tylko `ZACZNIJ-TUTAJ.txt`, licencję i instalator.
 2. Kliknij dwukrotnie **`Install.command`**.
 3. Jeżeli pojawi się pytanie macOS, zatwierdź otwarcie.
@@ -87,9 +87,11 @@ prywatnego pliku:
 Nie trzeba go otwierać, chyba że instalacja się nie powiedzie i poprosi o niego
 osoba pomagająca rozwiązać problem.
 
-Instalator może doinstalować Homebrew, Colimę, narzędzia kontenerowe i Go.
-Jeżeli na Macu brakuje oficjalnych narzędzi Apple, sam otworzy ich systemowy
-instalator; po jego zakończeniu wystarczy ponownie kliknąć `Install.command`.
+Paczka zawiera gotowe programy i nie wymaga kompilowania Guardiana ani Go.
+Instalator może doinstalować Homebrew, Colimę i narzędzia kontenerowe.
+Homebrew może wymagać oficjalnych narzędzi Apple; po ich instalacji uruchom
+`Install.command` ponownie. Instalowanie bezpośrednio z repozytorium nadal
+wymaga Go i Swift. Podpis aplikacji jest lokalny (ad hoc), bez notaryzacji Apple.
 Właściwy program zostanie umieszczony w:
 
 ```text
@@ -124,20 +126,28 @@ awaryjnymi skrótami zgodnymi z wersją 0.2.
 
 ## Bezpieczna aktualizacja
 
-Do aktualizacji również służy dwuklik na `Install.command`. Wersja 0.3.0:
+Do aktualizacji również służy dwuklik na `Install.command`. Wersja 0.5.0:
 
 1. instaluje tylko brakujące wymagania;
 2. odczytuje i sprawdza wersję z pliku `VERSION`;
-3. buduje Go i natywną aplikację do plików tymczasowych, testuje silnik Go i
-   uruchamia wbudowaną, niezależną od wersji macOS samokontrolę aplikacji;
+3. weryfikuje manifest, sumy, architekturę i podpisy gotowych programów,
+   kopiuje je do plików tymczasowych i uruchamia lokalną samokontrolę;
 4. sprawdza istniejącą konfigurację bez pytania o zapisane hasło;
 5. kopiuje `deploy` do nowego, losowego katalogu i waliduje Compose;
 6. atomowo odsuwa poprzedni `deploy`, uruchamia nowy i czeka na oba porty
    Rspamd;
-7. lokalnie podpisuje aplikację ad-hoc i sprawdza jej podpis;
+7. sprawdza lokalny podpis ad hoc dostarczonej aplikacji;
 8. atomowo podmienia `deploy`, backend i aplikację;
-9. awaria w kontrolowanych punktach przywraca wszystkie poprzednie elementy;
+9. po awarii próbuje przywrócić poprzednie elementy, a przy nieudanym
+   przywracaniu zachowuje kopie i zgłasza potrzebę pomocy;
 10. wykonuje kontrolę, a następnie odświeża wcześniej zainstalowaną usługę.
+
+Końcowy komunikat rozróżnia sukces, instalację wymagającą uwagi i błąd.
+Brak potwierdzenia z rdzenia instalatora nie jest sukcesem. Dwie instalacje
+nie mogą działać równolegle. Po awarii z pozostawioną blokadą sprawdź w Monitorze
+aktywności, czy instalator i jego procesy zakończyły pracę, a dopiero potem
+usuń `~/Library/Logs/O2 Mail Guardian/install.lock`. Nie usuwaj blokady aktywnej
+instalacji. Przy nieudanym rollbacku zachowaj kopie i log dla osoby pomagającej.
 
 Także przypadkowe zamknięcie Terminala, utrata okna lub `Ctrl+C` podczas
 podmiany uruchamia ten sam rollback. Test wydania symuluje przerwanie sygnałem

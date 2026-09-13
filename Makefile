@@ -1,4 +1,5 @@
 GO ?= go
+export GO
 GOVULNCHECK_VERSION ?= v1.7.0
 VERSION ?= $(shell tr -d '[:space:]' < VERSION)
 LDFLAGS ?= -s -w -X main.version=$(VERSION)

@@ -379,6 +379,7 @@ final class GuardianModel: ObservableObject {
     @Published var lastScan: ScanOutcome?
     @Published var archiveLoaded = false
     @Published var archiveFilter = "all"
+    @Published var archiveDateRange: [String] = []
     @Published private(set) var initialRefreshCompleted = false
     @Published private(set) var onboardingRequired = true
     private var refreshing = false
@@ -449,8 +450,9 @@ final class GuardianModel: ObservableObject {
         onboardingRequired = true
     }
 
-    func perform(_ title: String = "Aktualizuję ustawienia…", work: @escaping () async throws -> String?) async {
-        guard !busy else { return }
+    @discardableResult
+    func perform(_ title: String = "Aktualizuję ustawienia…", work: @escaping () async throws -> String?) async -> Bool {
+        guard !busy else { return false }
         noticeTask?.cancel()
         notice = nil
         failure = nil
@@ -461,15 +463,18 @@ final class GuardianModel: ObservableObject {
             showNotice(try await work())
             failure = nil
             await refresh()
+            return failure == nil
         } catch let error as APIErrorPayload {
             if error.code == "CANCELLED" {
-                showNotice("Operacja została anulowana.")
+                snapshotIsStale = true
+                showNotice("Operacja została anulowana. Wcześniej zakończone kroki mogły zostać zapisane. Odśwież stan ochrony.")
             } else {
                 failure = error
             }
         } catch {
             failure = APIErrorPayload(code: "GUI", severity: "error", message: error.localizedDescription, recovery: "Uruchom Napraw.")
         }
+        return false
     }
 
     func cancel() {
@@ -539,10 +544,15 @@ final class GuardianModel: ObservableObject {
         operationTitle = "Wczytuję listę kopii…"
         busy = true
         archiveLoaded = false
+        // Keep the attempted page for Retry; old rows and pagination are no
+        // longer valid if this request fails or changes the filter.
+        archivePage = ArchivePage(page: page, items: [], hasNext: false)
+        failure = nil
         defer { busy = false }
         do {
             var arguments = ["archive", "list", String(page)]
-            if archiveFilter != "all" { arguments.append(archiveFilter) }
+            if archiveFilter != "all" || !archiveDateRange.isEmpty { arguments.append(archiveFilter) }
+            arguments.append(contentsOf: archiveDateRange)
             archivePage = try await Backend.call(arguments)
             archiveLoaded = true
             failure = nil
@@ -570,12 +580,12 @@ final class GuardianModel: ObservableObject {
     }
 
     func restoreArchive(id: Int64) async {
-        await perform("Przywracam wiadomość do folderu Do sprawdzenia…") {
+        let completed = await perform("Przywracam wiadomość do folderu Do sprawdzenia…") {
             let result: RestoreResult = try await Backend.call(["archive", "restore", String(id)])
             if result.alreadyPresent == true { return "Wiadomość nadal istnieje; nie utworzono duplikatu." }
             return result.restored ? "Wiadomość została przywrócona do AI-Do-sprawdzenia." : nil
         }
-        if failure == nil { await loadArchive(page: archivePage.page) }
+        if completed { await loadArchive(page: archivePage.page) }
     }
 }
 
@@ -645,11 +655,22 @@ struct O2MailGuardianApp: App {
                 }
         }
         .defaultSize(width: 1080, height: 780)
+        .commands {
+            CommandMenu("Przejdź") {
+                Group {
+                    Button("Przegląd") { model.section = .overview }.keyboardShortcut("1", modifiers: .command)
+                    Button("Nauka i korekty") { model.section = .learning }.keyboardShortcut("2", modifiers: .command)
+                    Button("Odzyskiwanie") { model.section = .archive }.keyboardShortcut("3", modifiers: .command)
+                    Button("Ustawienia") { model.section = .settings }.keyboardShortcut("4", modifiers: .command)
+                    Button("Pomoc") { model.section = .help }.keyboardShortcut("5", modifiers: .command)
+                }.disabled(!model.initialRefreshCompleted || model.onboardingRequired || model.reconfigure)
+            }
+        }
 
         MenuBarExtra {
             GuardianMenu(model: model)
         } label: {
-            Label("O2 Mail Guardian — \(ProtectionPresentation(model.snapshot, stale: model.snapshotIsStale).title)", systemImage: statusSymbol(model.snapshot.health))
+            Label("O2 Mail Guardian — \(ProtectionPresentation(model.snapshot, stale: model.snapshotIsStale).title)", systemImage: ProtectionPresentation(model.snapshot, stale: model.snapshotIsStale).symbol)
         }
     }
 }
@@ -813,6 +834,7 @@ struct OnboardingView: View {
     private var dryRunDone: Bool { setupCommitted && OnboardingGate.dryRunCompleted(model.snapshot) }
     @State private var setupCommitted = false
     @State private var showFolderChoice = false
+    @State private var showAccountPreparation = true
     @FocusState private var accountField: AccountField?
     private enum AccountField { case email, password }
 
@@ -839,24 +861,29 @@ struct OnboardingView: View {
                     }.foregroundStyle(index <= step ? GuardianStyle.accent : .secondary)
                     if index < 3 { Rectangle().fill(.quaternary).frame(height: 1) }
                 }
-            }.accessibilityElement(children: .ignore).accessibilityLabel("Krok \(step) z 3")
+            }.accessibilityElement(children: .ignore).accessibilityLabel("Krok \(step) z 3: \(["Konto", "Foldery", "Bezpieczna próba"][step - 1])")
             GuardianCard {
                 switch step {
                 case 1:
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Konto i hasło aplikacyjne").font(.title2.bold())
-                        GroupBox {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("Przed połączeniem włącz w o2 dostęp IMAP i logowanie dwustopniowe, a następnie utwórz osobne hasło dla Guardiana.")
-                                Link("Otwórz instrukcję tworzenia hasła aplikacyjnego", destination: URL(string: "https://pomoc.o2.pl/wpkonto/hasla-do-aplikacji-zewnetrznej")!)
-                            }
-                            .font(.footnote)
+                        DisclosureGroup("Przygotuj konto o2", isExpanded: $showAccountPreparation) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Label("1. Włącz dostęp IMAP w ustawieniach poczty o2.", systemImage: "envelope.badge.shield.half.filled")
+                                Label("2. Włącz logowanie dwustopniowe i zachowaj klucze awaryjne.", systemImage: "lock.shield")
+                                Label("3. Utwórz osobne hasło aplikacyjne dla Guardiana.", systemImage: "key")
+                                Link("Jak utworzyć hasło aplikacyjne w o2", destination: URL(string: "https://pomoc.o2.pl/wpkonto/hasla-do-aplikacji-zewnetrznej")!)
+                                Text("Masz już hasło aplikacyjne? Wpisz dane poniżej. Tych kroków nie trzeba wykonywać ponownie.")
+                                    .foregroundStyle(.secondary)
+                            }.font(.callout).padding(.vertical, 10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         Text("Adres e-mail o2").font(.callout.weight(.medium))
                         TextField("adres@o2.pl", text: $email)
                             .textFieldStyle(.roundedBorder)
                             .focused($accountField, equals: .email)
                             .accessibilityLabel("Adres e-mail o2")
+                            .disabled(model.busy)
                             .onSubmit { accountField = .password }
                             .textContentType(.username)
                             .autocorrectionDisabled()
@@ -870,6 +897,7 @@ struct OnboardingView: View {
                             .textFieldStyle(.roundedBorder)
                             .focused($accountField, equals: .password)
                             .accessibilityLabel("Hasło aplikacyjne o2")
+                            .disabled(model.busy)
                         Text("Nie wpisuj zwykłego hasła do poczty. Zapiszemy je bezpiecznie w pęku kluczy macOS.").font(.footnote).foregroundStyle(.secondary)
                         Button("Połącz i wykryj ustawienia") { Task { await probeConnection() } }
                             .buttonStyle(.borderedProminent)
@@ -930,7 +958,7 @@ struct OnboardingView: View {
                                 .keyboardShortcut(.defaultAction)
                                 .disabled(model.busy)
                             Button("Zakończ w trybie ręcznym") { model.completeOnboarding() }.disabled(model.busy)
-                            Text("W trybie ręcznym Guardian sprawdza pocztę tylko po użyciu przycisku „Sprawdź skrzynkę teraz”.")
+                            Text("W trybie ręcznym Guardian sprawdza pocztę tylko po użyciu przycisku „Sprawdź pocztę teraz”.")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
                     }
@@ -943,6 +971,7 @@ struct OnboardingView: View {
     }
 
     private func probeConnection() async {
+        guard OnboardingGate.canProbe(email: email, password: password, busy: model.busy) else { return }
         model.failure = nil
         model.notice = nil
         model.operationTitle = "Sprawdzam konto i bezpieczne połączenie z o2…"
@@ -961,6 +990,7 @@ struct OnboardingView: View {
     }
 
     private func commitSetup() async {
+        guard OnboardingGate.canCommitFolders(folderSelected: !spamFolder.isEmpty, busy: model.busy) else { return }
         model.failure = nil
         model.notice = nil
         model.operationTitle = "Zapisuję konto i przygotowuję foldery…"

@@ -47,3 +47,10 @@ if /usr/bin/grep -Eiq 'wiersz|linia|line [0-9]' "${STATUS_FILE}"; then
   exit 1
 fi
 printf 'Przyjazny opis nieprzewidzianego błędu: OK.\n'
+
+if HOME="$TEST_HOME" XDG_CONFIG_HOME="$TEST_HOME/config" GUARDIAN_INSTALL_SELF_TEST=1 \
+   GUARDIAN_INSTALL_ROLLBACK_FAILURE_TEST=1 GUARDIAN_INSTALL_STATUS_FILE="$STATUS_FILE" \
+   /bin/bash "$PROJECT_DIR/Install.command" > "$TEST_HOME/rollback-failed" 2>&1; then exit 1; fi
+grep -q 'Przywracanie poprzedniej instalacji nie powiodło się' "$STATUS_FILE"
+[[ -n "$(find "$TEST_HOME/.local/bin/o2-mail-guardian" -name '*.saved' -print)" ]]
+printf 'Nieudany rollback zachowuje kopię i zgłasza brak potwierdzenia: OK\n'

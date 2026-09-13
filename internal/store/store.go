@@ -752,6 +752,19 @@ func (db *DB) ArchivedPage(ctx context.Context, account string, limit, offset in
 // Filter before pagination, never only the visible page. Keep every query
 // scoped to the account; headers are still decrypted only on explicit preview.
 func (db *DB) ArchivedPageFiltered(ctx context.Context, account string, limit, offset int, status string) ([]Message, error) {
+	return db.ArchivedPageInRange(ctx, account, limit, offset, status, time.Time{}, time.Time{})
+}
+
+// Date bounds are inclusive at the start and exclusive at the end.
+func (db *DB) ArchivedPageInRange(ctx context.Context, account string, limit, offset int, status string, start, end time.Time) ([]Message, error) {
+	from, until := "", ""
+	if !start.IsZero() {
+		from = start.UTC().Format(time.RFC3339Nano)
+	}
+	if !end.IsZero() {
+		until = end.UTC().Format(time.RFC3339Nano)
+	}
+
 	if limit < 1 || limit > 1000 {
 		limit = 100
 	}
@@ -762,8 +775,11 @@ func (db *DB) ArchivedPageFiltered(ctx context.Context, account string, limit, o
 SELECT id,account,source_folder,current_folder,uidvalidity,uid,message_id_hash,raw_sha256,
  size_bytes,verdict,score,symbols_json,action,status,first_seen,last_scanned,
  quarantined_at,delete_after,archive_path,archive_until,feedback,feedback_intent,last_error
-FROM messages WHERE account=? AND archive_path<>'' AND (?='' OR status=?) ORDER BY first_seen DESC, id DESC LIMIT ? OFFSET ?`,
-		account, status, status, limit, offset)
+FROM messages WHERE account=? AND archive_path<>'' AND (?='' OR status=?)
+AND (?='' OR julianday(first_seen)>=julianday(?))
+AND (?='' OR julianday(first_seen)<julianday(?))
+ORDER BY first_seen DESC, id DESC LIMIT ? OFFSET ?`,
+		account, status, status, from, from, until, until, limit, offset)
 	if err != nil {
 		return nil, err
 	}
