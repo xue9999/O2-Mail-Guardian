@@ -6,9 +6,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"math/big"
@@ -165,6 +167,55 @@ func TestIMAPLifecycleAgainstMemoryServer(t *testing.T) {
 	}
 	if len(remaining) != 0 {
 		t.Fatalf("message was not deleted: %v", remaining)
+	}
+}
+
+func TestMoveWithRawResolvesMissingCopyUID(t *testing.T) {
+	serverTLS, roots := testTLS(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := imapmemserver.New()
+	user := imapmemserver.NewUser("test@o2.pl", "app-password")
+	for _, folder := range []string{"INBOX", "Review"} {
+		if err := user.Create(folder, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw := []byte("From: sender@example.org\r\nTo: test@o2.pl\r\nMessage-ID: <fallback@example.org>\r\nSubject: fallback\r\n\r\nbody")
+	if _, err := user.Append("INBOX", bytes.NewReader(raw), &imap.AppendOptions{Time: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	backend.AddUser(user)
+	server := imapserver.New(&imapserver.Options{
+		NewSession: func(*imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
+			return backend.NewSession(), nil, nil
+		},
+		Caps: imap.CapSet{imap.CapIMAP4rev1: {}, imap.CapMove: {}},
+	})
+	go func() { _ = server.Serve(tls.NewListener(ln, serverTLS)) }()
+	t.Cleanup(func() { _ = server.Close(); _ = ln.Close() })
+	_, portText, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client, err := dialWithTLSConfig(ctx, "localhost", port, "test@o2.pl", "app-password", &tls.Config{ServerName: "localhost", RootCAs: roots, MinVersion: tls.VersionTLS12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	msgUIDs, validity, err := client.SearchSince("INBOX", time.Time{}, 0)
+	if err != nil || len(msgUIDs) != 1 {
+		t.Fatalf("source: %v %v", msgUIDs, err)
+	}
+	sum := sha256.Sum256(raw)
+	moved, err := client.MoveWithRaw("INBOX", validity, msgUIDs[0], "Review", false, hex.EncodeToString(sum[:]))
+	if err != nil || moved.UID == 0 || moved.UIDValidity == 0 {
+		t.Fatalf("unresolved move: %+v %v", moved, err)
+	}
+	if got, err := client.Fetch("Review", moved.UID, true); err != nil || !bytes.Equal(got.Raw, raw) {
+		t.Fatalf("wrong destination: %+v %v", got, err)
 	}
 }
 

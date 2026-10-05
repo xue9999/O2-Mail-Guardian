@@ -10,3 +10,5 @@ coverage.out
 deploy/secrets/
 .env
 dist/
+__pycache__/
+*.pyc

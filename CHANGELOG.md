@@ -1,5 +1,25 @@
 # Zmiany w Mail Guardian
 
+## 0.5.1
+
+- Naprawa i sprawdzanie stosu działają z aplikacji macOS również przy
+  ograniczonym PATH; zależności Colimy i Dockera dostają jawne ścieżki.
+- Model Redis ma dwie sprawdzane sumą kontrolną kopie na Macu poza Colimą.
+  Cofnięty model nie zastępuje dobrej kopii; błędy trwałego zapisu Redis
+  i eksportu modelu pozostają widoczne w wyniku przebiegu.
+- Uzgadnianie przeniesień bez COPYUID potwierdza pełną treść wiadomości.
+  Wyszukiwanie po rozmiarze omija nieczytelne, niezwiązane wiadomości na
+  serwerze. Niejednoznaczne wyniki ani błędy odczytu nie potwierdzają ruchu.
+- Pominięcie uczenia przez Rspamd (HTTP 204) zachowuje korektę użytkownika
+  bez fałszywego zwiększania liczników i bez zapętlenia ponowień.
+- Kontrola utraty modelu używa obserwowanych liczników Rspamd; duplikaty
+  statystyczne nie powodują fałszywego alarmu.
+- Status opiera się na ostatnim zakończonym sprawdzeniu. Przebieg z błędami
+  nie dostaje zielonego wyniku ani udanego heartbeat.
+- Kreator obsługuje zgodne nazwy pól starszej aplikacji i aktualnego backendu.
+- GitHub sprawdza testy, podatności, aplikację i instalator przy zmianach
+  oraz co tydzień. Testy nie mają dostępu do prawdziwej poczty ani haseł.
+
 ## 0.5.0
 
 - Lokalny ZIP dla Apple Silicon zawiera gotowy backend i aplikację macOS.

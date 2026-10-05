@@ -20,7 +20,7 @@ require_json() {
   fi
 }
 
-snapshot="$(${MOCK} api snapshot)"
+snapshot="$("${MOCK}" api snapshot)"
 require_json "${snapshot}" '"configured":false'
 require_json "${snapshot}" '"first_dry_run":false'
 
@@ -28,17 +28,17 @@ commit_request='{"email":"test@o2.pl","password":"secret-only-for-local-mock","s
 commit="$(printf '%s' "${commit_request}" | "${MOCK}" api setup commit)"
 require_json "${commit}" '"configured":true'
 
-snapshot="$(${MOCK} api snapshot)"
+snapshot="$("${MOCK}" api snapshot)"
 require_json "${snapshot}" '"configured":true'
 require_json "${snapshot}" '"automation":"off"'
 require_json "${snapshot}" '"first_dry_run":false'
 
 "${MOCK}" api run dry-run >/dev/null
-snapshot="$(${MOCK} api snapshot)"
+snapshot="$("${MOCK}" api snapshot)"
 require_json "${snapshot}" '"first_dry_run":true'
 
 "${MOCK}" api service enable >/dev/null
-snapshot="$(${MOCK} api snapshot)"
+snapshot="$("${MOCK}" api snapshot)"
 require_json "${snapshot}" '"automation":"on"'
 
 if rg -q 'secret-only-for-local-mock|test@o2.pl' "${STATE_FILE}"; then

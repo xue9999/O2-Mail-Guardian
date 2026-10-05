@@ -12,6 +12,73 @@ import (
 	"time"
 )
 
+func TestRunWithIndividualErrorsCannotCountAsSuccess(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	run, err := db.BeginRun(ctx, "run", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Errors = 1
+	if err := db.FinishRun(ctx, run, nil); err != nil {
+		t.Fatal(err)
+	}
+	status, count, err := db.LatestLiveRunOutcome(ctx)
+	if err != nil || status != "error" || count != 1 {
+		t.Fatalf("partial failure marked successful: %s %d %v", status, count, err)
+	}
+	if success, err := db.HasSuccessfulRun(ctx); err != nil || success {
+		t.Fatalf("failed run passed the successful-run gate: %v %v", success, err)
+	}
+	if _, err := db.BeginRun(ctx, "run", false); err != nil {
+		t.Fatal(err)
+	}
+	status, count, err = db.LatestLiveRunOutcome(ctx)
+	if err != nil || status != "error" || count != 1 {
+		t.Fatal("starting a retry hid the last failure")
+	}
+}
+
+func TestLatestLiveRunOutcomeIgnoresOldErrorsAndDryRuns(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	old, err := db.BeginRun(ctx, "run", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.Errors = 3
+	if err := db.FinishRun(ctx, old, errors.New("old failure")); err != nil {
+		t.Fatal(err)
+	}
+	recent, err := db.BeginRun(ctx, "run", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishRun(ctx, recent, nil); err != nil {
+		t.Fatal(err)
+	}
+	dry, err := db.BeginRun(ctx, "run", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dry.Errors = 2
+	if err := db.FinishRun(ctx, dry, nil); err != nil {
+		t.Fatal(err)
+	}
+	status, count, err := db.LatestLiveRunOutcome(ctx)
+	if err != nil || status != "ok" || count != 0 {
+		t.Fatalf("outcome=%q,%d,%v", status, count, err)
+	}
+}
+
 func TestVersionTwoDatabaseMigratesFeedbackIntentTransactionally(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	legacy, err := sql.Open("sqlite", path)

@@ -2,7 +2,9 @@ package imapmail
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -238,6 +240,29 @@ func (c *Client) SearchSince(folder string, since time.Time, limit int) ([]uint3
 	return out, uidValidity, nil
 }
 
+// SearchExactSize narrows an investigation to messages of one RFC822 size.
+// The caller must still verify the complete message before identifying it.
+func (c *Client) SearchExactSize(folder string, size int64) ([]uint32, uint32, error) {
+	if size < 1 {
+		return nil, 0, errors.New("rozmiar wiadomości musi być dodatni")
+	}
+	uidValidity, err := c.selectFolderFresh(folder, true)
+	if err != nil {
+		return nil, 0, err
+	}
+	data, err := c.client.UIDSearch(&imap.SearchCriteria{Larger: size - 1, Smaller: size + 1}, nil).Wait()
+	if err != nil {
+		return nil, 0, fmt.Errorf("wyszukiwanie rozmiaru w folderze %q: %w", folder, err)
+	}
+	uids := data.AllUIDs()
+	out := make([]uint32, len(uids))
+	for i, uid := range uids {
+		out[i] = uint32(uid)
+	}
+	slices.Sort(out)
+	return out, uidValidity, nil
+}
+
 // SearchUIDPage searches a bounded numeric UID range strictly above afterUID.
 // The server therefore never needs to return an unbounded folder-wide result.
 func (c *Client) SearchUIDPage(folder string, afterUID uint32, limit int) ([]uint32, uint32, bool, error) {
@@ -314,9 +339,63 @@ func (c *Client) Fetch(folder string, uid uint32, withRaw bool) (Message, error)
 	return msg, nil
 }
 
+// ProbeFetch reports only whether individual read-only FETCH items succeed.
+// It is intended for diagnosing server-side failures without exposing mail.
+func (c *Client) ProbeFetch(folder string, uid uint32) (map[string]string, error) {
+	if _, err := c.selectFolderFresh(folder, true); err != nil {
+		return nil, err
+	}
+	checks := []struct {
+		name    string
+		options *imap.FetchOptions
+	}{
+		{"uid", &imap.FetchOptions{UID: true}},
+		{"size", &imap.FetchOptions{RFC822Size: true}},
+		{"envelope", &imap.FetchOptions{Envelope: true}},
+		{"flags", &imap.FetchOptions{Flags: true}},
+		{"internal_date", &imap.FetchOptions{InternalDate: true}},
+		{"body", &imap.FetchOptions{BodySection: []*imap.FetchItemBodySection{{Peek: true}}}},
+	}
+	result := map[string]string{}
+	for _, check := range checks {
+		items, err := c.client.Fetch(imap.UIDSetNum(imap.UID(uid)), check.options).Collect()
+		if err != nil {
+			result[check.name] = err.Error()
+		} else if len(items) != 1 {
+			result[check.name] = "missing"
+		} else {
+			result[check.name] = "ok"
+		}
+	}
+	return result, nil
+}
+
 func (c *Client) Move(folder string, expectedUIDValidity, uid uint32, destination string, markUnread bool) (MoveResult, error) {
+	return c.move(folder, expectedUIDValidity, uid, destination, markUnread, "")
+}
+
+// MoveWithRaw confirms a MOVE without COPYUID by finding the exact message
+// among UIDs newly assigned in the destination. An ambiguous match stays
+// unresolved for the engine's durable reconciliation path.
+func (c *Client) MoveWithRaw(folder string, expectedUIDValidity, uid uint32, destination string, markUnread bool, rawSHA256 string) (MoveResult, error) {
+	return c.move(folder, expectedUIDValidity, uid, destination, markUnread, rawSHA256)
+}
+
+func (c *Client) move(folder string, expectedUIDValidity, uid uint32, destination string, markUnread bool, rawSHA256 string) (MoveResult, error) {
 	if !c.SafeMoveSupported() {
 		return MoveResult{}, errors.New("serwer nie obsługuje natywnego IMAP MOVE; przenoszenie zablokowane")
+	}
+	var destinationValidity, destinationNext uint32
+	if rawSHA256 != "" {
+		var err error
+		destinationValidity, err = c.selectFolderFresh(destination, true)
+		if err != nil {
+			return MoveResult{}, err
+		}
+		destinationNext = c.uidNext
+		if destinationNext == 0 {
+			return MoveResult{}, errors.New("serwer nie podał UIDNEXT folderu docelowego; przenoszenie zablokowane")
+		}
 	}
 	uidValidity, err := c.selectFolder(folder, false)
 	if err != nil {
@@ -336,13 +415,46 @@ func (c *Client) Move(folder string, expectedUIDValidity, uid uint32, destinatio
 			result.UID = uint32(nums[0])
 		}
 	}
-	c.selected = folder
+	if (result.UID == 0 || result.UIDValidity == 0) && rawSHA256 != "" {
+		if resolved, ok := c.resolveMovedUID(destination, destinationValidity, destinationNext, rawSHA256); ok {
+			result = resolved
+		}
+	}
 	if markUnread && result.UID > 0 {
 		if err := c.MarkUnread(destination, result.UIDValidity, result.UID); err != nil {
 			return result, err
 		}
 	}
 	return result, nil
+}
+
+func (c *Client) resolveMovedUID(destination string, oldValidity, oldNext uint32, rawSHA256 string) (MoveResult, bool) {
+	newValidity, err := c.selectFolderFresh(destination, true)
+	if err != nil || newValidity == 0 || newValidity != oldValidity || c.uidNext < oldNext {
+		return MoveResult{}, false
+	}
+	if c.uidNext-oldNext > 1000 {
+		return MoveResult{}, false
+	}
+	uids, _, complete, err := c.SearchUIDPage(destination, oldNext-1, 1000)
+	if err != nil || !complete {
+		return MoveResult{}, false
+	}
+	var matchedUID uint32
+	for _, candidateUID := range uids {
+		message, err := c.Fetch(destination, candidateUID, true)
+		if err != nil {
+			return MoveResult{}, false
+		}
+		sum := sha256.Sum256(message.Raw)
+		if hex.EncodeToString(sum[:]) == rawSHA256 {
+			if matchedUID != 0 {
+				return MoveResult{}, false
+			}
+			matchedUID = candidateUID
+		}
+	}
+	return MoveResult{UIDValidity: newValidity, UID: matchedUID}, matchedUID != 0
 }
 
 func (c *Client) MarkUnread(folder string, expectedUIDValidity, uid uint32) error {

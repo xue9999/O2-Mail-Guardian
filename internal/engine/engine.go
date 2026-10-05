@@ -226,6 +226,14 @@ func (e *Engine) reconcilePending(ctx context.Context) error {
 			_ = e.Store.DeleteReconcileProgress(ctx, record.ID)
 			continue
 		}
+		if _, ok := e.Mail.(interface {
+			SearchExactSize(string, int64) ([]uint32, uint32, error)
+		}); ok {
+			if err := e.reconcileBySize(ctx, record, destination, finalStatus, deadline); err != nil {
+				_ = e.Store.AddEvent(ctx, record.ID, "move_uncertain", err.Error())
+			}
+			continue
+		}
 		if record.Status == "move_ambiguous" {
 			// A user or server may have removed one of the conflicting copies.
 			// Start a new bounded pass instead of trusting the old ambiguity.
@@ -261,6 +269,57 @@ func (e *Engine) reconcilePending(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// Unrelated server messages can fail ENVELOPE/BODY fetch permanently. Search
+// by exact RFC822 size first, then require full content matches on both sides.
+// A failed search or candidate read cannot prove absence and never retries MOVE.
+func (e *Engine) reconcileBySize(ctx context.Context, record store.Message, destination, finalStatus string, deadline time.Time) error {
+	search := e.Mail.(interface {
+		SearchExactSize(string, int64) ([]uint32, uint32, error)
+	})
+	p := store.ReconcileProgress{}
+	for _, source := range []bool{true, false} {
+		folder := destination
+		if source {
+			folder = record.CurrentFolder
+		}
+		uids, validity, err := search.SearchExactSize(folder, record.SizeBytes)
+		if err != nil {
+			return err
+		}
+		if validity == 0 || len(uids) > 1000 {
+			return errors.New("uzgadnianie wymaga pełnego, ograniczonego wyniku wyszukiwania")
+		}
+		for _, uid := range uids {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if time.Now().After(deadline) {
+				return errors.New("uzgadnianie będzie kontynuowane w następnym przebiegu")
+			}
+			message, err := e.Mail.Fetch(folder, uid, true)
+			if err != nil {
+				return err
+			}
+			if !messageMatchesRecord(message, record) {
+				continue
+			}
+			if source {
+				p.SourceMatches++
+				p.SourceMatchUID = uid
+			} else {
+				p.DestinationMatches++
+				p.DestinationMatchUID = uid
+			}
+		}
+		if source {
+			p.SourceUIDValidity, p.SourceComplete = validity, true
+		} else {
+			p.DestinationUIDValidity, p.DestinationComplete = validity, true
+		}
+	}
+	return e.finishReconciliation(ctx, record, destination, finalStatus, p)
 }
 
 func (e *Engine) scanReconcilePage(ctx context.Context, folder string, record store.Message, progress *store.ReconcileProgress, source bool, deadline time.Time) error {
@@ -755,6 +814,15 @@ func (e *Engine) processTraining(ctx context.Context, run *store.Run, folder str
 			continue
 		}
 		if err := e.archiveLearnAndMove(ctx, msg, folder, decision, destination, status, !spam, action, spam); err != nil {
+			if errors.Is(err, rspamd.ErrLearningSkipped) {
+				if spam {
+					run.Quarantined++
+				} else {
+					run.Rescued++
+				}
+				e.Report("warning", "Zapamiętano Twoją korektę i przeniesiono wiadomość. Rspamd pominął uczenie; przykład nie zwiększa postępu Bayesa.")
+				continue
+			}
 			run.Errors++
 			e.Report("error", err.Error())
 			continue
@@ -845,6 +913,23 @@ func (e *Engine) archiveLearnAndMove(
 	}
 	record.FeedbackIntent = feedback
 	if err := e.Rspamd.Learn(ctx, msg.Raw, spam); err != nil {
+		if errors.Is(err, rspamd.ErrLearningSkipped) {
+			// Preserve the exact-content correction without pretending Bayes
+			// learned it. The intent already guards classification and ham purge.
+			if err := e.Store.UpdateLocation(ctx, id, msg.Folder, msg.UIDValidity, msg.UID, "pending_move"); err != nil {
+				return err
+			}
+			if err := e.Store.AddEvent(ctx, id, "learn_skipped", "HTTP 204: zachowano korektę użytkownika bez potwierdzenia uczenia Bayesa"); err != nil {
+				return err
+			}
+			if err := e.Store.SupersedeOtherCopies(ctx, record.Account, record.RawSHA256, id); err != nil {
+				return err
+			}
+			if err := e.movePending(ctx, id, msg, destination, finalStatus, markUnread); err != nil {
+				return err
+			}
+			return rspamd.ErrLearningSkipped
+		}
 		record.Status = "error"
 		record.LastError = err.Error()
 		_, _ = e.Store.UpsertMessage(ctx, &record)
@@ -897,7 +982,15 @@ func (e *Engine) movePending(
 	destination, finalStatus string,
 	markUnread bool,
 ) error {
-	move, err := e.Mail.Move(msg.Folder, msg.UIDValidity, msg.UID, destination, markUnread)
+	var move imapmail.MoveResult
+	var err error
+	if verified, ok := e.Mail.(interface {
+		MoveWithRaw(string, uint32, uint32, string, bool, string) (imapmail.MoveResult, error)
+	}); ok {
+		move, err = verified.MoveWithRaw(msg.Folder, msg.UIDValidity, msg.UID, destination, markUnread, archive.SHA256(msg.Raw))
+	} else {
+		move, err = e.Mail.Move(msg.Folder, msg.UIDValidity, msg.UID, destination, markUnread)
+	}
 	if err != nil {
 		if move.UID > 0 && move.UIDValidity > 0 {
 			if stateErr := e.Store.FinalizeMove(

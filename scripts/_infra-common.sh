@@ -102,11 +102,12 @@ compose() {
 }
 
 wait_for_rspamd() {
-  local attempt port healthy
+  local attempt port healthy response
   for attempt in {1..60}; do
     healthy=1
     for port in 11333 11334; do
-      if [[ "$(/usr/bin/curl -fsS --max-time 2 "http://127.0.0.1:${port}/ping" 2>/dev/null || true)" != "pong" ]]; then
+      response="$(/usr/bin/curl -fsS --max-time 2 "http://127.0.0.1:${port}/ping" 2>/dev/null || true)"
+      if [[ "${response%$'\r'}" != "pong" ]]; then
         healthy=0
         break
       fi

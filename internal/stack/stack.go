@@ -41,18 +41,18 @@ func (m Manager) Up() error {
 		return errors.New("nie znaleziono Colimy; uruchom Install.command")
 	}
 	statusCtx, statusCancel := context.WithTimeout(context.Background(), shortCommandTimeout)
-	statusErr := exec.CommandContext(statusCtx, colima, "status").Run()
+	statusErr := stackCommand(statusCtx, colima, "status").Run()
 	statusCancel()
 	if statusErr != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, colima, colimaStartArgs()...)
-		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-		if err := cmd.Run(); err != nil {
+		cmd := stackCommand(ctx, colima, colimaStartArgs()...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return errors.New("uruchamianie Colimy przekroczyło 3 minuty; uruchom ponownie „guardian napraw”")
 			}
-			return fmt.Errorf("uruchamianie Colimy: %w", err)
+			return fmt.Errorf("uruchamianie Colimy: %w (%s)", err, safeOutput(output))
 		}
 	}
 	docker := commandPath("docker")
@@ -65,6 +65,9 @@ func (m Manager) Up() error {
 	ctx, cancel := context.WithTimeout(context.Background(), composeTimeout)
 	defer cancel()
 	if err := m.compose(ctx, "up", "-d", "--remove-orphans", "--wait"); err != nil {
+		return err
+	}
+	if err := m.checkRedisPersistence(); err != nil {
 		return err
 	}
 	healthCtx, healthCancel := context.WithTimeout(context.Background(), healthTimeout)
@@ -82,7 +85,7 @@ func (m Manager) Down() error {
 	colima := commandPath("colima")
 	if colima != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), shortCommandTimeout)
-		err := exec.CommandContext(ctx, colima, "status").Run()
+		err := stackCommand(ctx, colima, "status").Run()
 		cancel()
 		if err != nil {
 			// An already stopped VM means that the requested end state has
@@ -104,7 +107,7 @@ func (m Manager) Status() (string, error) {
 		return "", errors.New("nie znaleziono Colimy; uruchom Install.command")
 	}
 	statusCtx, statusCancel := context.WithTimeout(context.Background(), shortCommandTimeout)
-	statusErr := exec.CommandContext(statusCtx, colima, "status").Run()
+	statusErr := stackCommand(statusCtx, colima, "status").Run()
 	statusCancel()
 	if statusErr != nil {
 		return "", errors.New("lokalny silnik jest zatrzymany; wybierz „Napraw instalację” albo uruchom „guardian napraw”")
@@ -116,8 +119,8 @@ func (m Manager) Status() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), shortCommandTimeout)
 	defer cancel()
 	args := m.dockerComposeArgs("ps")
-	cmd := exec.CommandContext(ctx, docker, args...)
-	cmd.Env = append(os.Environ(), "GUARDIAN_RUNTIME_DIR="+m.RuntimeDir)
+	cmd := stackCommand(ctx, docker, args...)
+	cmd.Env = append(cmd.Env, "GUARDIAN_RUNTIME_DIR="+m.RuntimeDir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -139,6 +142,9 @@ func (m Manager) DeepCheck() error {
 	if _, err := m.Status(); err != nil {
 		return err
 	}
+	if err := m.checkRedisPersistence(); err != nil {
+		return err
+	}
 	docker := commandPath("docker")
 	for _, check := range []struct {
 		name string
@@ -151,8 +157,8 @@ func (m Manager) DeepCheck() error {
 		{name: "DNS Unbound", args: []string{"exec", "-T", "unbound", "drill-hc", "@127.0.0.1", "dnssec.works"}},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		cmd := exec.CommandContext(ctx, docker, m.dockerComposeArgs(check.args...)...)
-		cmd.Env = append(os.Environ(), "GUARDIAN_RUNTIME_DIR="+m.RuntimeDir)
+		cmd := stackCommand(ctx, docker, m.dockerComposeArgs(check.args...)...)
+		cmd.Env = append(cmd.Env, "GUARDIAN_RUNTIME_DIR="+m.RuntimeDir)
 		output, err := cmd.CombinedOutput()
 		cancel()
 		if err != nil {
@@ -164,7 +170,7 @@ func (m Manager) DeepCheck() error {
 	}
 	colima := commandPath("colima")
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	output, err := exec.CommandContext(ctx, colima, "ssh", "--", "df", "-Pk", "/").CombinedOutput()
+	output, err := stackCommand(ctx, colima, "ssh", "--", "df", "-Pk", "/").CombinedOutput()
 	cancel()
 	if err != nil {
 		return fmt.Errorf("miejsce w Colimie: %w (%s)", err, safeOutput(output))
@@ -207,8 +213,8 @@ func (m Manager) compose(ctx context.Context, args ...string) error {
 		return errors.New("nie znaleziono programu docker; uruchom Install.command")
 	}
 	full := m.dockerComposeArgs(args...)
-	cmd := exec.CommandContext(ctx, docker, full...)
-	cmd.Env = append(os.Environ(), "GUARDIAN_RUNTIME_DIR="+m.RuntimeDir)
+	cmd := stackCommand(ctx, docker, full...)
+	cmd.Env = append(cmd.Env, "GUARDIAN_RUNTIME_DIR="+m.RuntimeDir)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -245,7 +251,7 @@ func waitForDocker(docker string, timeout time.Duration) error {
 	var lastErr error
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		lastErr = exec.CommandContext(ctx, docker, "--context", "colima", "info").Run()
+		lastErr = stackCommand(ctx, docker, "--context", "colima", "info").Run()
 		cancel()
 		if lastErr == nil {
 			return nil
@@ -318,6 +324,21 @@ func safeOutput(out []byte) string {
 		out = append(out[:max], []byte("…")...)
 	}
 	return string(out)
+}
+
+// Native macOS apps inherit a minimal PATH. Finding Colima by absolute path
+// is insufficient: Colima invokes limactl, and Docker invokes Compose helpers.
+// Give every stack subprocess the same explicit dependency search path.
+func stackCommand(ctx context.Context, executable string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, executable, args...)
+	path := strings.Join([]string{filepath.Dir(executable), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin", os.Getenv("PATH")}, string(os.PathListSeparator))
+	for _, value := range os.Environ() {
+		if !strings.HasPrefix(value, "PATH=") {
+			cmd.Env = append(cmd.Env, value)
+		}
+	}
+	cmd.Env = append(cmd.Env, "PATH="+path)
+	return cmd
 }
 
 func commandPath(name string) string {

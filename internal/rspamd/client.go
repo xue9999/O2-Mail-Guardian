@@ -53,6 +53,10 @@ type BayesStats struct {
 	HamRevision  uint64 `json:"ham_revision"`
 }
 
+// HTTP 204 is Rspamd's explicit refusal under its learning conditions. It
+// confirms neither a Bayes update nor an already learned message.
+var ErrLearningSkipped = errors.New("Rspamd pominął uczenie zgodnie z warunkami klasyfikatora")
+
 func New(scanURL, learnURL, password string, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 45 * time.Second
@@ -225,6 +229,9 @@ func (c *Client) Learn(ctx context.Context, raw []byte, spam bool) error {
 		return fmt.Errorf("uczenie Rspamd: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNoContent {
+		return ErrLearningSkipped
+	}
 	body, err := readLimited(resp.Body, 1<<20)
 	if err != nil {
 		return err

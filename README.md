@@ -38,7 +38,7 @@ po kroku znajduje się w
 
 Jeżeli nie jesteś programistą, zacznij właśnie tutaj — nie trzeba wcześniej
 otwierać Terminala ani wpisywać poleceń. Jeżeli otrzymałeś plik
-**`O2-Mail-Guardian-0.5.0-macos-arm64.zip`**, rozpakuj go i otwórz powstały folder. Są w
+**`O2-Mail-Guardian-0.5.1-macos-arm64.zip`**, rozpakuj go i otwórz powstały folder. Są w
 nim tylko instrukcja, licencja i instalator; techniczne składniki są celowo
 ukryte. W Finderze kliknij dwukrotnie **`Install.command`**. Instalator:
 
@@ -62,7 +62,7 @@ globalnie zabezpieczeń macOS.
 Ten sam `Install.command` służy do bezpiecznej aktualizacji. Jeśli działająca
 konfiguracja już istnieje, instalator zachowuje konto, hasło w pęku kluczy,
 bazę, archiwum i ustawienie automatycznej usługi. Nie uruchamia ponownie
-kreatora hasła. Najpierw weryfikuje gotowe programy wersji 0.5.0, a backend,
+kreatora hasła. Najpierw weryfikuje gotowe programy wersji 0.5.1, a backend,
 aplikację i konfigurację silnika podmienia dopiero po walidacji. Po awarii
 podejmuje przywracanie poprzedniego kompletu. Jeśli przywracanie się nie uda,
 zachowuje kopie i prosi o pomoc zamiast potwierdzać sukces.
@@ -146,9 +146,13 @@ potrzebny jest tylko przy pomyłkach:
 | Nie masz pewności | Pozostaw ją w `AI-Do-sprawdzenia` |
 | Chcesz tylko podejrzeć zatrzymany spam | Otwórz `AI-Kwarantanna`; niczego nie klikaj w wiadomości |
 
-Przy następnym przebiegu Guardian nauczy Rspamd poprawnej klasyfikacji. Dopiero
-po udanym uczeniu przeniesie ważną wiadomość do Odebranych albo spam do
-kwarantanny.
+Przy następnym przebiegu Guardian zapisze Twoją korektę i spróbuje nauczyć
+Rspamd poprawnej klasyfikacji. Po udanym uczeniu przeniesie ważną wiadomość
+do Odebranych albo spam do kwarantanny. Jeśli Rspamd jawnie pominie uczenie
+zgodnie ze swoimi warunkami (HTTP 204), Guardian zachowa korektę dla dokładnie
+tej wiadomości i również ją przeniesie, ale nie zwiększy licznika przykładów
+Bayesa. Błąd połączenia lub brak prawidłowego potwierdzenia pozostawia
+wiadomość w folderze uczącym do ponownej próby.
 
 Lista **Zaufani** w o2 działa wyłącznie po stronie o2. Guardian jej nie
 odczytuje i nie używa jej jako sygnału zaufania — każdą wiadomość ocenia na
@@ -203,7 +207,7 @@ według instrukcji rozwiązywania problemów.
 
 ## Dokumentacja
 
-- [Zmiany w wersji 0.5.0](CHANGELOG.md)
+- [Zmiany w wersji 0.5.1](CHANGELOG.md)
 - [Kryteria audytu CX i dostępności](docs/AUDYT-CX.md)
 
 - [Instalacja krok po kroku](docs/INSTALACJA.md)

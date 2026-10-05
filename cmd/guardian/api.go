@@ -202,6 +202,10 @@ func (a *application) buildAPISnapshot() (apiSnapshot, error) {
 	if err != nil {
 		return snapshot, err
 	}
+	latestStatus, latestErrors, err := db.LatestLiveRunOutcome(context.Background())
+	if err != nil {
+		return snapshot, err
+	}
 	snapshot.TrainedSpam, snapshot.TrainedHam, err = db.TrainingTotals(context.Background(), cfg.Account.Email)
 	if err != nil {
 		return snapshot, err
@@ -243,7 +247,7 @@ func (a *application) buildAPISnapshot() (apiSnapshot, error) {
 			snapshot.Recommendation = "Sprawdź teraz skrzynkę albo uruchom Napraw."
 		}
 	}
-	if snapshot.Summary.Errors > 0 || snapshot.Summary.PendingMoves > 0 || heartbeatErr != nil {
+	if latestStatus == "error" || latestErrors > 0 || snapshot.Summary.PendingMoves > 0 || heartbeatErr != nil {
 		if snapshot.Health == "healthy" {
 			snapshot.Health, snapshot.HealthLabel = "attention", "Wymaga uwagi"
 		}
@@ -269,6 +273,41 @@ type setupRequest struct {
 	AcceptExistingTraining bool   `json:"accept_existing_training,omitempty"`
 }
 
+type setupRequestWire struct {
+	Email                       string  `json:"email"`
+	Password                    string  `json:"password"`
+	SpamFolder                  *string `json:"spam_folder"`
+	SpamFolderCamel             *string `json:"spamFolder"`
+	AcceptExistingTraining      *bool   `json:"accept_existing_training"`
+	AcceptExistingTrainingCamel *bool   `json:"acceptExistingTraining"`
+}
+
+func readSetupRequest(reader io.Reader) (setupRequest, error) {
+	var wire setupRequestWire
+	if err := readAPIRequest(reader, &wire); err != nil {
+		return setupRequest{}, err
+	}
+	if wire.SpamFolder != nil && wire.SpamFolderCamel != nil && *wire.SpamFolder != *wire.SpamFolderCamel {
+		return setupRequest{}, errors.New("sprzeczne wartości folderu SPAM")
+	}
+	if wire.AcceptExistingTraining != nil && wire.AcceptExistingTrainingCamel != nil &&
+		*wire.AcceptExistingTraining != *wire.AcceptExistingTrainingCamel {
+		return setupRequest{}, errors.New("sprzeczne potwierdzenia folderów nauki")
+	}
+	request := setupRequest{Email: wire.Email, Password: wire.Password}
+	if wire.SpamFolder != nil {
+		request.SpamFolder = *wire.SpamFolder
+	} else if wire.SpamFolderCamel != nil {
+		request.SpamFolder = *wire.SpamFolderCamel
+	}
+	if wire.AcceptExistingTraining != nil {
+		request.AcceptExistingTraining = *wire.AcceptExistingTraining
+	} else if wire.AcceptExistingTrainingCamel != nil {
+		request.AcceptExistingTraining = *wire.AcceptExistingTrainingCamel
+	}
+	return request, nil
+}
+
 type setupProbe struct {
 	DetectedSpam string   `json:"detected_spam"`
 	Folders      []string `json:"folders"`
@@ -279,8 +318,8 @@ func (a *application) apiSetup(args []string) (any, error) {
 	if len(args) != 1 || (args[0] != "probe" && args[0] != "commit") {
 		return nil, errors.New("użyj guardian api setup probe|commit")
 	}
-	var request setupRequest
-	if err := readAPIRequest(a.in, &request); err != nil {
+	request, err := readSetupRequest(a.in)
+	if err != nil {
 		return nil, err
 	}
 	request.Email = strings.TrimSpace(request.Email)

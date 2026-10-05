@@ -934,6 +934,77 @@ func TestPurgeRechecksFlagsImmediatelyBeforeDelete(t *testing.T) {
 	}
 }
 
+func TestSkippedLearningPreservesCorrectionWithoutBayesCountOrRetryLoop(t *testing.T) {
+	for _, spam := range []bool{false, true} {
+		t.Run(fmt.Sprint(spam), func(t *testing.T) {
+			now := time.Now().UTC()
+			e, mail, db, scanner := newTestEngine(t, now, false)
+			folder, destination, feedback := e.Config.Folders.TrainHam, e.Config.Folders.Inbox, "ham"
+			if spam {
+				folder, destination, feedback = e.Config.Folders.TrainSpam, e.Config.Folders.Quarantine, "spam"
+			}
+			msg := mailMessage("short-correction", now)
+			mail.add(folder, msg)
+			scanner.learnErr = rspamd.ErrLearningSkipped
+			ctx := context.Background()
+			run, err := e.Run(ctx, RunOptions{})
+			if err != nil || run.Errors != 0 || run.LearnedSpam != 0 || run.LearnedHam != 0 || mail.count(folder) != 0 || mail.count(destination) != 1 {
+				t.Fatalf("skipped learn did not safely complete the correction: run=%+v err=%v", run, err)
+			}
+			hash := archive.SHA256(msg.Raw)
+			var guarded bool
+			if spam {
+				guarded, err = db.HasSpamFeedback(ctx, e.Config.Account.Email, hash)
+			} else {
+				guarded, err = db.HasHamFeedback(ctx, e.Config.Account.Email, hash)
+			}
+			if err != nil || !guarded {
+				t.Fatalf("correction guard missing: %v", err)
+			}
+			learned, err := db.HasLearnedFeedback(ctx, e.Config.Account.Email, hash, feedback)
+			if err != nil || learned {
+				t.Fatalf("skipped learn was reported as Bayes learning: %v", err)
+			}
+			spams, hams, err := db.TrainingTotals(ctx, e.Config.Account.Email)
+			if err != nil || spams != 0 || hams != 0 {
+				t.Fatalf("incorrect Bayes totals: %d/%d %v", spams, hams, err)
+			}
+			if run, err := e.Run(ctx, RunOptions{}); err != nil || run.Errors != 0 || scanner.learnCalls != 1 {
+				t.Fatalf("correction entered a retry loop: calls=%d run=%+v err=%v", scanner.learnCalls, run, err)
+			}
+			pending, err := db.PendingMessages(ctx, e.Config.Account.Email)
+			if err != nil || len(pending) != 0 {
+				t.Fatalf("pending moves remain: %v %v", pending, err)
+			}
+		})
+	}
+}
+
+func TestSkippedLearningWithFailedMoveRemainsPendingAndRetriesOnlyMove(t *testing.T) {
+	now := time.Now().UTC()
+	e, mail, db, scanner := newTestEngine(t, now, false)
+	mail.add(e.Config.Folders.TrainSpam, mailMessage("skipped-learn-move-failure", now))
+	scanner.learnErr = rspamd.ErrLearningSkipped
+	mail.moveFailures = 1
+	ctx := context.Background()
+	first, err := e.Run(ctx, RunOptions{})
+	if err != nil || first.Errors != 1 || first.Status != "error" || first.LearnedSpam != 0 || mail.count(e.Config.Folders.TrainSpam) != 1 {
+		t.Fatalf("failed move incorrectly completed: %+v %v", first, err)
+	}
+	pending, err := db.PendingMessages(ctx, e.Config.Account.Email)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("missing durable move: %v %v", pending, err)
+	}
+	second, err := e.Run(ctx, RunOptions{})
+	if err != nil || second.Errors != 0 || scanner.learnCalls != 1 || mail.count(e.Config.Folders.Quarantine) != 1 || mail.count(e.Config.Folders.TrainSpam) != 0 {
+		t.Fatalf("move retry failed or relearned: %+v %v calls=%d", second, err, scanner.learnCalls)
+	}
+	spam, ham, err := db.TrainingTotals(ctx, e.Config.Account.Email)
+	if err != nil || spam != 0 || ham != 0 {
+		t.Fatalf("retry invented Bayes learning: %d/%d %v", spam, ham, err)
+	}
+}
+
 func TestFailedHamLearningCreatesPermanentPurgeVeto(t *testing.T) {
 	now := time.Now().UTC()
 	e, mail, db, scanner := newTestEngine(t, now, true)

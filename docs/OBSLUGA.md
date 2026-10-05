@@ -59,6 +59,12 @@ kwarantannie lub folderze do sprawdzenia. Przy następnym przebiegu program:
 2. po udanym uczeniu przeniesie ją do Odebranych;
 3. oznaczy ją jako nieprzeczytaną, aby nie została przeoczona.
 
+Jeśli Rspamd jawnie pominie uczenie (HTTP 204), program zachowa Twoją korektę
+dla dokładnej zawartości wiadomości i przeniesie ją zgodnie z wyborem. Raport
+pokaże pominięcie, a licznik przykładów Bayesa nie wzrośnie. Takie pominięcie
+nie powoduje ponawiania tej samej operacji co dwie godziny. Pozostałe błędy
+uczenia pozostawiają wiadomość w folderze uczącym do ponownej próby.
+
 ## Jak bezpiecznie zebrać przykłady Bayesa
 
 Nie trzeba robić tego jednego dnia. `guardian status` pokazuje dwa liczniki
@@ -196,7 +202,7 @@ W podsumowaniu najważniejsze są:
 - **kwarantanna** — wiadomości zatrzymane jako spam;
 - **do sprawdzenia** — decyzje wymagające człowieka;
 - **błędy** — wiadomości pozostawione bez destrukcyjnego działania;
-- **nauczone spam/ważne** — liczba przyjętych korekt;
+- **nauczone spam/ważne** — liczba korekt z potwierdzonym uczeniem Bayesa;
 - **spełnia warunek wieku purge** — liczba wiadomości starszych niż 30 dni;
   przed usunięciem każda z nich przechodzi jeszcze kontrolę kopii, UID,
   UIDVALIDITY, skrótów i ponowny skan Rspamd.
@@ -258,6 +264,14 @@ uruchamia Colimę oraz kontenery. Jeśli samonaprawa albo skan się nie powiedzi
 macOS pokazuje ogólne powiadomienie bez tematu, nadawcy, treści i sekretów.
 Powtarzający się błąd powoduje najwyżej jedno takie powiadomienie na 24
 godziny.
+
+Po udanym sprawdzeniu poczty Guardian zabezpiecza model uczący w katalogu
+`redis-backup` obok danych programu na Macu, poza dyskiem Colimy. Zachowuje
+dwie generacje kopii, sprawdza ich sumy kontrolne i odmawia zastąpienia kopii
+modelem o niższych licznikach uczenia. Kopia jest odświeżana po nowym uczeniu
+lub po 12 godzinach. Błąd jej zapisu jest raportowany jako błąd przebiegu.
+Uruchamianie filtra sprawdza też trwały zapis Redis, ponieważ sama odpowiedź
+na test połączenia nie oznacza, że model jest bezpiecznie zapisywany.
 
 `guardian.log` nie rośnie bez końca. Po przekroczeniu 5 MiB usługa zachowuje
 bieżący zapis jako `guardian.log.1`, wcześniejszy jako `guardian.log.2` i

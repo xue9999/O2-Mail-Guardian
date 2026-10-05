@@ -212,12 +212,31 @@ func TestAPIUnconfiguredSnapshotUsesVersionedEnvelope(t *testing.T) {
 }
 
 func TestAPIRequestRejectsUnknownFieldsAndOversize(t *testing.T) {
-	var request setupRequest
-	if err := readAPIRequest(strings.NewReader(`{"email":"a@o2.pl","password":"secret","unexpected":true}`), &request); err == nil {
+	if _, err := readSetupRequest(strings.NewReader(`{"email":"a@o2.pl","password":"secret","unexpected":true}`)); err == nil {
 		t.Fatal("unknown API field was accepted")
 	}
-	if err := readAPIRequest(strings.NewReader(strings.Repeat("x", (64<<10)+1)), &request); err == nil {
+	if _, err := readSetupRequest(strings.NewReader(strings.Repeat("x", (64<<10)+1))); err == nil {
 		t.Fatal("oversized API request was accepted")
+	}
+}
+
+func TestSetupRequestAcceptsShippedGUIAndSnakeCase(t *testing.T) {
+	for _, input := range []string{
+		`{"email":"a@o2.pl","password":"synthetic","spamFolder":"Spam","acceptExistingTraining":true}`,
+		`{"email":"a@o2.pl","password":"synthetic","spam_folder":"Spam","accept_existing_training":true}`,
+	} {
+		request, err := readSetupRequest(strings.NewReader(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if request.SpamFolder != "Spam" || !request.AcceptExistingTraining {
+			t.Fatalf("request not normalized: %#v", request)
+		}
+	}
+	if _, err := readSetupRequest(strings.NewReader(
+		`{"email":"a@o2.pl","password":"synthetic","spam_folder":"Spam","spamFolder":"INBOX"}`,
+	)); err == nil {
+		t.Fatal("conflicting folder values were accepted")
 	}
 }
 
@@ -465,6 +484,32 @@ func TestSnapshotMigratesLegacySuccessfulInstallation(t *testing.T) {
 	proof, exists, err := db.GetSettingWithPresence(context.Background(), "first_dry_run_completed_at")
 	if err != nil || !exists || proof == "" {
 		t.Fatalf("legacy proof was not migrated: proof=%q exists=%v err=%v", proof, exists, err)
+	}
+}
+
+func TestBayesHighWaterDoesNotConfuseRawCorrectionsWithStatisticalLearns(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "guardian.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	for i, hash := range []string{"delivery-a", "delivery-b"} {
+		_, err := db.UpsertMessage(ctx, &store.Message{Account: "test@o2.pl", SourceFolder: "AI-Naucz-spam", CurrentFolder: "AI-Kwarantanna", UIDValidity: 1, UID: uint32(i + 1), RawSHA256: hash, MessageIDHash: hash, Feedback: "spam", Action: "learn_spam", Status: "quarantined", FirstSeen: time.Now(), LastScanned: time.Now()})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for key, value := range map[string]string{"bayes_spam_revision_highwater": "1", "bayes_ham_revision_highwater": "0"} {
+		if err := db.SetSetting(ctx, key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := compareBayesHighWater(ctx, db, "test@o2.pl", rspamd.BayesStats{SpamRevision: 1}); err != nil {
+		t.Fatalf("content deduplication was treated as rollback: %v", err)
+	}
+	if err := compareBayesHighWater(ctx, db, "test@o2.pl", rspamd.BayesStats{}); err == nil {
+		t.Fatal("real model reset was accepted")
 	}
 }
 
