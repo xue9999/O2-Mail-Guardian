@@ -87,7 +87,7 @@
 ## Verification routes
 
 - GitHub workflow `.github/workflows/check.yml` runs `make check` and packages
-  on Apple Silicon macOS for changes and weekly vulnerability checks. Release
+  on Apple Silicon macOS for changes, including vulnerability checks. Release
   only the tested commit and install the same verified package locally.
 - Automatic pending-move reconciliation uses exact RFC822 size search when
   available, followed by complete content hashes on source and destination.

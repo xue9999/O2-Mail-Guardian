@@ -17,8 +17,8 @@
 - Status opiera się na ostatnim zakończonym sprawdzeniu. Przebieg z błędami
   nie dostaje zielonego wyniku ani udanego heartbeat.
 - Kreator obsługuje zgodne nazwy pól starszej aplikacji i aktualnego backendu.
-- GitHub sprawdza testy, podatności, aplikację i instalator przy zmianach
-  oraz co tydzień. Testy nie mają dostępu do prawdziwej poczty ani haseł.
+- GitHub sprawdza testy, podatności, aplikację i instalator przy zmianach.
+  Testy nie mają dostępu do prawdziwej poczty ani haseł.
 
 ## 0.5.0
 
