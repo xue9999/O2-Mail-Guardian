@@ -9,6 +9,47 @@
 - `protect` leaves INBOX unchanged automatically, but moves server-SPAM messages
   to review and processes explicit training corrections. Do not say this mode
   never moves any mail. See `internal/engine/engine.go`, `decide` and training.
+- On the tested o2 account, native IMAP MOVE succeeded without a destination UID.
+  `MoveWithRaw` records destination UIDNEXT before the move and, if COPYUID is
+  absent, confirms one exact raw hash among newly assigned destination UIDs.
+  An ambiguous match remains pending. A completed run or accepted Rspamd
+  correction alone does not prove the destination move was reconciled.
+  Confirm exact
+  source and destination state before restoring automation; user moves from
+  review into training or Trash can change the destination before reconciliation.
+- `tools/inspect_pending_mail.go` is a local aggregate IMAP comparison and
+  narrowly scoped repair helper. `--deep` is read-only, `--apply` finalizes
+  unique raw-hash matches in the expected destination, and `--find-other`
+  searches all IMAP folders by exact size then full hash. `--ack-trash` records
+  a uniquely verified external move to Trash without moving mail. Back up the
+  SQLite database and keep automation off before any repair option.
+- `--resolve-destination` uses size-narrowed searches across all IMAP folders
+  to finalize a unique complete-hash match in the intended destination. Unlike
+  ordinary diagnostic searches, any failed candidate read or folder search
+  aborts this repair. It also rejects shared destination ownership and rechecks
+  the full content before writing; it performs no IMAP moves. This route avoids
+  reading unrelated damaged legacy messages during a full-folder investigation.
+- On the tested o2 account, a small number of stable UIDs can be returned by
+  SEARCH while the server replies `NO Fetch failed` to ENVELOPE and BODY FETCH.
+  UID, size, flags and internal date remain readable. Retrying the whole scan
+  or local installation repair cannot supply missing message content. Leave
+  such messages on the server, report the server-side FETCH failure, and do not
+  treat the rest of the successful scan as proof those messages were classified.
+- Re-probe previously unreadable UIDs before diagnosing a persistent server
+  failure: o2 FETCH errors can be transient. Keep read-only probes separate
+  from classification and confirm a complete dry-run afterward.
+- A pending review move may already be in a user training folder. Verify its
+  full raw hash across folders first, then let normal training process the
+  correction: `SupersedeOtherCopies` retires the obsolete pending record and
+  `MoveWithRaw` confirms the new destination. Do not mark the training location
+  processed manually, since that would skip the user's correction.
+- Activation quality includes zero-tolerance historical conditions within the
+  current protection period. When false rescue or unexplained-spam counts are
+  nonzero, the remaining-day counter alone cannot make active mode eligible;
+  do not reset the period merely to hide those observations.
+- Dashboard service health follows the latest completed live run and current
+  pending moves; daily historical error totals remain visible as history but
+  do not make a later clean run appear broken.
 - Backend safety checks remain authoritative. Presentation data is read-only;
   activation still requires the existing typed confirmation and backend recheck.
 - `GuardianModel.perform` returns true only after work and state refresh succeed.
@@ -45,6 +86,32 @@
 
 ## Verification routes
 
+- GitHub workflow `.github/workflows/check.yml` runs `make check` and packages
+  on Apple Silicon macOS for changes, including vulnerability checks. Release
+  only the tested commit and install the same verified package locally.
+- Automatic pending-move reconciliation uses exact RFC822 size search when
+  available, followed by complete content hashes on source and destination.
+  Failed searches or candidate fetches do not prove absence. Duplicate matches
+  stay ambiguous, and completed moves are never repeated. This bypasses
+  unrelated broken server envelopes without weakening move confirmation.
+- Current health reads the latest completed live run; starting a retry must
+  not hide the previous error. Snapshot rotation retains the previous baseline
+  even when publication is interrupted between directory renames.
+- A completed traversal with unresolved moves or restores is an error outcome;
+  service heartbeat cannot mark it successful merely because no new mail failed.
+
+- Rspamd 4.1.2 uses HTTP 204 when classifier learning conditions deny a
+  message (including token limits); an empty response is not successful Bayes
+  learning. `ErrLearningSkipped` retains durable `feedback_intent`, records
+  `learn_skipped`, and completes the user's destination move without setting
+  `feedback` or increasing learned totals. Exact-content feedback guards and
+  the ham purge veto still apply. Generic empty 200 replies and other errors
+  remain failures. Never lower global token safeguards to silence one retry.
+- Runs containing individual operation errors have status `error` even when
+  folder traversal finishes. `service-run` propagates these errors to launchd
+  and its heartbeat; CLI advice uses the latest live outcome while preserving
+  historical daily error counts.
+
 - `make check` is the project verification entry point. Override `GO` with the
   path to a suitable compiler if Go is not on PATH; `go.mod` pins the toolchain.
   Cached compilers can be found under `~/go/pkg/mod/golang.org/toolchain*/bin/go`.
@@ -52,6 +119,13 @@
 - `scripts/test-swift.sh` uses a local mock and configures the standalone Apple
   Command Line Tools Testing framework. Swift tests sharing ProcessController
   belong to the same serialized suite, including tests in extensions.
+  Standalone CLT can require explicit loading of its `libTestingMacros.dylib`.
+  If a newer SDK requires absent SwiftUI macros, use an installed compatible
+  SDK through SDKROOT for local checks, or the full Xcode CI build. Do not
+  change SwiftUI state semantics to hide a missing compiler plugin.
+  File-provider metadata in Documents can invalidate signing generated test
+  bundles; set `GUARDIAN_SWIFT_SCRATCH_DIR` outside synced folders. Removing
+  FinderInfo once is insufficient because the provider can recreate it.
 - `scripts/preview-gui.sh SCENARIO [dark]` builds an isolated `.app` with its
   own embedded mock. A bare SwiftPM executable is not reliably discoverable by
   native UI tools; use the returned bundle path. Preview mode does not connect to
@@ -104,3 +178,58 @@
 - `test-install-prebuilt.sh` runs real staging/signature/self-tests with isolated
   HOME and a narrow external-effects driver; it never operates real services,
   Keychain or IMAP. Full live Docker and older-macOS claims need separate proof.
+
+## Live macOS installation route
+
+- Native macOS GUI processes can inherit only system PATH entries. Absolute
+  discovery of Colima alone is insufficient because it launches `limactl`.
+  Use `stackCommand` for every stack subprocess, including status and nested
+  Docker helpers; preserve runtime variables and supply Homebrew dependency
+  directories. Verify the native repair button and a minimal-PATH deep check.
+
+- A healthy Redis PING does not prove persistence. Require AOF enabled,
+  successful last AOF write and successful RDB save in stack startup and deep
+  checks. After live scans keep two CRC-checked RDB generations with paired
+  model revisions in the host data directory `redis-backup`; never replace a
+  good generation with lower model revisions.
+- Compare model rollback with the stored highest observed Rspamd revisions.
+  Distinct raw corrections can be statistical duplicates; their SQL count is
+  only a conservative fallback when no observed baseline exists.
+- For Colima guest I/O errors, stop scans and preserve SQLite, binaries and
+  both offline VM disks before repair. If Redis still serves memory, export it
+  before stopping the VM using `tools/recover_redis_snapshot.py` and a private
+  loopback SSH forward. Validate RDB CRC and `redis-check-rdb` before loading.
+  Keep damaged AOF files; regenerate AOF from the validated recovered RDB in an
+  isolated container without resetting training.
+- `tools/check_colima_disk.py` checks the GPT filesystem partition in a sparse
+  regular file because macOS raw-device e2fsck can fail at its final write.
+  Repairs require an offline original and a distinct preserved disk backup;
+  copy changes back only after an independent clean read-only filesystem check.
+  Require VM restart, preserved model revisions and a clean live run before
+  restoring scheduling.
+
+- Install the verified prebuilt ZIP; source installation also needs Go and a
+  working SwiftUI build toolchain. Keep release checksum, manifest and binary
+  self-tests before changing the active installation.
+- Rspamd 4.1.2 `rspamadm pw` does not take its password directly from stdin.
+  Send it through stdin to a one-use, network-isolated container shell; never
+  place the secret in a host command argument or installation log.
+- The pinned Redis entrypoint needs privileges to switch from root. Run the
+  container directly as `redis` so `cap_drop: ALL` remains in force; confirm
+  `/data` is writable and the Redis healthcheck passes.
+- Rspamd `/ping` may return `pong` with CRLF. Host shell probes must strip the
+  terminal carriage return before comparison. Confirm both published loopback
+  ports and `rspamadm configtest` before reporting the stack ready.
+- An installed app with no account configuration is not protecting mail.
+  Complete the GUI's IMAP probe and dry-run before enabling a scan schedule.
+- The installed Swift GUI invokes `~/.local/bin/o2-mail-guardian/guardian`.
+  A backend-only repair can use an atomic replacement of that binary after Go
+  tests, vet, ad-hoc signature verification and self-test. Preserve a SQLite
+  backup and the previous binary, stop the scanner during repair, and validate
+  a live `service-run` with zero errors and zero pending moves before restoring
+  its schedule. `doctor` and a successful dry-run alone do not prove live moves.
+- The shipped 0.5.0 GUI encodes setup commit fields as `spamFolder` and
+  `acceptExistingTraining`, while the Go API originally required snake_case.
+  Keep strict unknown-field rejection but accept both spellings for this
+  release; future Swift builds should use `.convertToSnakeCase`. Verify the
+  actual GUI commit and a subsequent dry-run before calling onboarding done.

@@ -1,9 +1,27 @@
+import Foundation
 import Testing
 @testable import O2MailGuardianApp
 
 @Suite(.serialized)
 struct ProtocolTests {
     private final class OperationToken {}
+
+    @Test func setupCommitEncodesBackendFieldNames() throws {
+        struct Request: Encodable {
+            let email: String
+            let password: String
+            let spamFolder: String
+            let acceptExistingTraining: Bool
+        }
+        let data = try Backend.encodeInput(Request(
+            email: "test@o2.pl", password: "synthetic", spamFolder: "Spam", acceptExistingTraining: true
+        ))
+        let fields = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(fields["spam_folder"] as? String == "Spam")
+        #expect(fields["accept_existing_training"] as? Bool == true)
+        #expect(fields["spamFolder"] == nil)
+        #expect(fields["acceptExistingTraining"] == nil)
+    }
 
     @Test func snapshotEnvelopeDecodesSnakeCaseWithoutMailContent() throws {
         let json = #"{"protocol":1,"ok":true,"data":{"configured":true,"health":"healthy","health_label":"Wszystko działa","recommendation":"OK","automation":"on","mode":"protect","purge_enabled":false,"summary":{},"trained_spam":2,"trained_ham":3,"required_spam":200,"required_ham":200,"first_dry_run":true,"app_autostart":true,"version":"0.3.0"}}"#

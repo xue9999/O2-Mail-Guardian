@@ -53,12 +53,13 @@ blue "Pobieram zweryfikowany obraz Rspamd 4.1.2…"
 docker --context colima pull "${RSPAMD_IMAGE}" >/dev/null
 
 controller_hash="$(
-  # Interaktywny tryb rspamadm czyta hasło ze stdin; --quiet zwraca wyłącznie
-  # hash przeznaczony do pliku konfiguracyjnego.
+  # Rspamd 4.1.2 nie czyta hasła dla `pw` ze stdin. Przekaż je przez stdin do
+  # izolowanego kontenera, aby nie trafiło do argumentów procesu na Macu.
+  # Kontener nie ma sieci i znika po wygenerowaniu hasha.
   printf '%s\n' "${controller_password}" |
     docker --context colima run --rm --interactive --network none --read-only --cap-drop ALL \
-      --entrypoint rspamadm "${RSPAMD_IMAGE}" \
-      pw --quiet
+      --entrypoint /bin/sh "${RSPAMD_IMAGE}" \
+      -c 'IFS= read -r password; exec rspamadm pw --quiet --password "$password"'
 )"
 [[ "${controller_hash}" == \$* ]] || fail "Rspamd nie wygenerował poprawnego hasha kontrolera."
 

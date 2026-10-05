@@ -205,6 +205,12 @@ func failureQuickAction(for code: String?) -> FailureQuickAction {
 }
 
 enum Backend {
+    static func encodeInput(_ input: Encodable) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        return try encoder.encode(AnyEncodable(input))
+    }
+
     static var executable: String {
         if let override = ProcessInfo.processInfo.environment["GUARDIAN_BIN"], !override.isEmpty {
             return override
@@ -220,7 +226,7 @@ enum Backend {
     ) async throws -> Value {
         let inputData: Data?
         if let input {
-            inputData = try JSONEncoder().encode(AnyEncodable(input))
+            inputData = try encodeInput(input)
         } else {
             inputData = nil
         }

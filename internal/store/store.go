@@ -383,7 +383,7 @@ func (db *DB) FinishRun(ctx context.Context, run *Run, runErr error) error {
 	now := time.Now().UTC()
 	run.FinishedAt = &now
 	run.Status = "ok"
-	if runErr != nil {
+	if runErr != nil || run.Errors > 0 {
 		run.Status = "error"
 	}
 	_, err := db.sql.ExecContext(ctx, `
@@ -445,6 +445,16 @@ func (db *DB) LastRunTimes(ctx context.Context) (attempt, success *time.Time, er
 	}
 	success, err = read(`finished_at`, `dry_run=0 AND status='ok' AND finished_at IS NOT NULL`)
 	return attempt, success, err
+}
+
+// LatestLiveRunOutcome excludes onboarding dry runs and historical errors from
+// the current service health signal. Historical counts remain in Summary.
+func (db *DB) LatestLiveRunOutcome(ctx context.Context) (status string, errorsCount int, err error) {
+	err = db.sql.QueryRowContext(ctx, `SELECT status,errors FROM runs WHERE dry_run=0 AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1`).Scan(&status, &errorsCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, nil
+	}
+	return status, errorsCount, err
 }
 
 func (db *DB) LocationProcessed(ctx context.Context, account, folder string, uidValidity uint32, uid uint32, activeMode bool) (bool, error) {

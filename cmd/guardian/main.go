@@ -222,7 +222,14 @@ func (a *application) serviceRun() (retErr error) {
 	}
 	heartbeat.Stage = "mailbox"
 	_ = service.WriteHeartbeat(dataDir, heartbeat)
-	return a.runCommand(nil)
+	run, err := a.runCommandResult(nil)
+	if err != nil {
+		return err
+	}
+	if run.Errors > 0 {
+		return fmt.Errorf("przebieg zakończony z błędami: %d; część operacji wymaga sprawdzenia", run.Errors)
+	}
+	return nil
 }
 
 func (a *application) help() {
@@ -840,9 +847,10 @@ func compareBayesHighWater(ctx context.Context, db *store.DB, account string, st
 					"Pozostaw tryb ochronny i uruchom Napraw; nie włączaj purge.", parseErr,
 				)
 			}
-			if parsed > highest {
-				highest = parsed
-			}
+			// Rspamd deduplicates statistical content, while SQLite counts
+			// distinct raw messages. Only an observed Rspamd revision can
+			// prove a regression once that authoritative baseline exists.
+			highest = parsed
 		}
 		if item.current < highest {
 			return apperror.Wrap(
@@ -912,6 +920,15 @@ func (a *application) runCommandResult(args []string) (*store.Run, error) {
 	if !*dryRun {
 		if _, statsErr := a.ensureBayesContinuity(context.Background(), rt); statsErr != nil {
 			a.warning("Nie udało się zapisać aktualnego stanu Bayesa: " + statsErr.Error())
+		}
+		stats, backupErr := rt.scanner.Stats(context.Background())
+		if backupErr == nil {
+			backupErr = (stack.Manager{ComposeFile: rt.cfg.Runtime.ComposeFile, RuntimeDir: config.DefaultRuntimeDir()}).BackupRedis(rt.cfg.Runtime.DataDir, stats.SpamRevision, stats.HamRevision)
+		}
+		if backupErr != nil {
+			run.Errors++
+			_ = rt.db.FinishRun(context.Background(), run, backupErr)
+			return run, fmt.Errorf("poczta została sprawdzona, ale nie udało się zabezpieczyć modelu Bayesa na Macu: %w", backupErr)
 		}
 	}
 	a.printRun(run)
@@ -1000,7 +1017,11 @@ func (a *application) statusCommand(args []string) error {
 		falseSpam, falseHam)
 
 	fmt.Fprintln(a.out, "\nCo zrobić teraz:")
-	for _, advice := range statusAdvice(summary, trainedSpam, trainedHam, cfg.Safety.MinLearnSpam, cfg.Safety.MinLearnHam) {
+	current := summary
+	if _, errorCount, outcomeErr := db.LatestLiveRunOutcome(context.Background()); outcomeErr == nil {
+		current.Errors = errorCount
+	}
+	for _, advice := range statusAdvice(current, trainedSpam, trainedHam, cfg.Safety.MinLearnSpam, cfg.Safety.MinLearnHam) {
 		fmt.Fprintf(a.out, "  • %s\n", advice)
 	}
 	fmt.Fprintf(a.out, "\nDane programu: %s\nArchiwum kopii: %s\n", cfg.Runtime.DataDir, cfg.Runtime.ArchiveDir)

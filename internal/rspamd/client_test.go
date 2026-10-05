@@ -2,6 +2,7 @@ package rspamd
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -164,6 +165,19 @@ func TestHTTPClientScanLearnAndPing(t *testing.T) {
 	}
 	if !learned || !passwordSeen {
 		t.Fatal("learning request was not authenticated")
+	}
+}
+
+func TestLearnNoContentIsSkippedRatherThanConfirmed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client := New(server.URL+"/checkv2", server.URL, "", time.Second)
+	for _, spam := range []bool{false, true} {
+		if err := client.Learn(context.Background(), []byte("mail"), spam); !errors.Is(err, ErrLearningSkipped) {
+			t.Fatalf("HTTP 204 must be a skipped learn, got %v", err)
+		}
 	}
 }
 
