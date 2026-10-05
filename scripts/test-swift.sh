@@ -4,6 +4,9 @@ set -Eeuo pipefail
 
 PROJECT_DIR="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 SWIFT_ARGS=(test --package-path "${PROJECT_DIR}/macos")
+if [[ -n "${GUARDIAN_SWIFT_SCRATCH_DIR:-}" ]]; then
+  SWIFT_ARGS+=(--scratch-path "${GUARDIAN_SWIFT_SCRATCH_DIR}")
+fi
 DEVELOPER_FRAMEWORKS="/Library/Developer/CommandLineTools/Library/Developer/Frameworks"
 
 # Testuje również prawdziwy most Process -> JSON używany przez GUI, ale wyłącznie

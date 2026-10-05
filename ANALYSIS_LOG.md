@@ -123,6 +123,9 @@
   If a newer SDK requires absent SwiftUI macros, use an installed compatible
   SDK through SDKROOT for local checks, or the full Xcode CI build. Do not
   change SwiftUI state semantics to hide a missing compiler plugin.
+  File-provider metadata in Documents can invalidate signing generated test
+  bundles; set `GUARDIAN_SWIFT_SCRATCH_DIR` outside synced folders. Removing
+  FinderInfo once is insufficient because the provider can recreate it.
 - `scripts/preview-gui.sh SCENARIO [dark]` builds an isolated `.app` with its
   own embedded mock. A bare SwiftPM executable is not reliably discoverable by
   native UI tools; use the returned bundle path. Preview mode does not connect to
