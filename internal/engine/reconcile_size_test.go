@@ -73,6 +73,16 @@ func TestAutomaticReconciliationSkipsUnrelatedUnreadableMessages(t *testing.T) {
 			if moves != 0 {
 				t.Fatal("reconciliation repeated an already completed move")
 			}
+			// The scheduler must not advertise an unresolved move as a
+			// successful scan, even if no new message produced an error.
+			delete(mail.folders["INBOX"], unrelatedUID)
+			run, err := e.Run(context.Background(), RunOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if failure != "none" && (run.Errors == 0 || run.Status != "error") {
+				t.Fatal("unresolved move reported as a successful run")
+			}
 		})
 	}
 }

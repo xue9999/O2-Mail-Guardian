@@ -115,6 +115,18 @@ func (e *Engine) Run(ctx context.Context, options RunOptions) (run *store.Run, r
 		if err := e.reconcilePendingRestores(ctx); err != nil {
 			return run, err
 		}
+		pending, err := e.Store.PendingMessages(ctx, e.Config.Account.Email)
+		if err != nil {
+			return run, err
+		}
+		restores, err := e.Store.PendingRestores(ctx, e.Config.Account.Email)
+		if err != nil {
+			return run, err
+		}
+		if remaining := len(pending) + len(restores); remaining > 0 && run.Errors == 0 {
+			run.Errors = remaining
+			e.Report("warning", "Przebieg nie jest w pełni zakończony: pozostały operacje do automatycznego uzgodnienia.")
+		}
 	}
 	return run, nil
 }

@@ -97,6 +97,8 @@
 - Current health reads the latest completed live run; starting a retry must
   not hide the previous error. Snapshot rotation retains the previous baseline
   even when publication is interrupted between directory renames.
+- A completed traversal with unresolved moves or restores is an error outcome;
+  service heartbeat cannot mark it successful merely because no new mail failed.
 
 - Rspamd 4.1.2 uses HTTP 204 when classifier learning conditions deny a
   message (including token limits); an empty response is not successful Bayes

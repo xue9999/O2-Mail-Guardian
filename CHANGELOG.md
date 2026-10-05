@@ -15,7 +15,8 @@
 - Kontrola utraty modelu używa obserwowanych liczników Rspamd; duplikaty
   statystyczne nie powodują fałszywego alarmu.
 - Status opiera się na ostatnim zakończonym sprawdzeniu. Przebieg z błędami
-  nie dostaje zielonego wyniku ani udanego heartbeat.
+  lub nierozstrzygniętymi operacjami nie dostaje zielonego wyniku ani udanego
+  heartbeat.
 - Kreator obsługuje zgodne nazwy pól starszej aplikacji i aktualnego backendu.
 - GitHub sprawdza testy, podatności, aplikację i instalator przy zmianach.
   Testy nie mają dostępu do prawdziwej poczty ani haseł.
