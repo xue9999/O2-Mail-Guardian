@@ -21,6 +21,10 @@ if [[ ! -d /Applications/Xcode.app ]] && [[ -d "${DEVELOPER_FRAMEWORKS}/Testing.
     -Xlinker -F -Xlinker "${DEVELOPER_FRAMEWORKS}"
     -Xlinker -rpath -Xlinker "${DEVELOPER_FRAMEWORKS}"
   )
+  TESTING_PLUGIN="/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing/libTestingMacros.dylib"
+  if [[ -f "${TESTING_PLUGIN}" ]]; then
+    SWIFT_ARGS+=(-Xswiftc -load-plugin-library -Xswiftc "${TESTING_PLUGIN}")
+  fi
 fi
 
 /usr/bin/swift "${SWIFT_ARGS[@]}"

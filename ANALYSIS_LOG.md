@@ -119,6 +119,10 @@
 - `scripts/test-swift.sh` uses a local mock and configures the standalone Apple
   Command Line Tools Testing framework. Swift tests sharing ProcessController
   belong to the same serialized suite, including tests in extensions.
+  Standalone CLT can require explicit loading of its `libTestingMacros.dylib`.
+  If a newer SDK requires absent SwiftUI macros, use an installed compatible
+  SDK through SDKROOT for local checks, or the full Xcode CI build. Do not
+  change SwiftUI state semantics to hide a missing compiler plugin.
 - `scripts/preview-gui.sh SCENARIO [dark]` builds an isolated `.app` with its
   own embedded mock. A bare SwiftPM executable is not reliably discoverable by
   native UI tools; use the returned bundle path. Preview mode does not connect to
